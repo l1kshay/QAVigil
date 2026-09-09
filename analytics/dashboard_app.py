@@ -75,21 +75,37 @@ STATUS_ORDER = ["passed", "flaky", "failed", "skipped"]
 SERVICE_ACCOUNT_SECRET = "gcp_service_account"
 
 
-def service_account_info() -> dict | None:
-    """The reader service account from Streamlit secrets, or None if absent.
+def read_service_account() -> tuple[dict | None, str | None]:
+    """The reader service account from Streamlit secrets, plus any real error.
 
-    Absence is a normal, supported state - it is what every local JSONL-only
-    run looks like - so it must never raise. ``st.secrets`` itself throws when
-    no secrets file exists at all, rather than returning empty, which is why
-    the lookup is wrapped.
+    Returns ``(info, error)``. A missing secrets file is a normal, supported
+    state - it is what every local JSONL-only run looks like - and reports
+    ``(None, None)``.
+
+    Anything else reports the error rather than hiding it. The previous version
+    caught every exception and returned None, which meant a *malformed*
+    ``gcp_service_account`` table was indistinguishable from an absent one: the
+    app quietly fell back to credentials it did not have. Silent degradation is
+    the failure mode this whole diagnostic exists to eliminate.
     """
     try:
-        if SERVICE_ACCOUNT_SECRET in st.secrets:
-            return dict(st.secrets[SERVICE_ACCOUNT_SECRET])
-    except Exception:
-        # No secrets.toml, or it is unreadable. Either way: no service account.
-        return None
-    return None
+        if SERVICE_ACCOUNT_SECRET not in st.secrets:
+            return None, None
+        return dict(st.secrets[SERVICE_ACCOUNT_SECRET]), None
+    except Exception as exc:
+        # Streamlit raises when no secrets file exists at all. That is expected
+        # and is not worth reporting; anything else is.
+        if type(exc).__name__ in {
+            "StreamlitSecretNotFoundError", "FileNotFoundError"
+        }:
+            return None, None
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def service_account_info() -> dict | None:
+    """Just the service account, for callers that do not need the error."""
+    info, _ = read_service_account()
+    return info
 
 
 def build_bigquery_client(project: str):
@@ -205,22 +221,114 @@ def explain_bigquery_failure(exc: Exception) -> str:
     return f"Could not read BigQuery ({name}: {text})."
 
 
-def load_data() -> tuple[pd.DataFrame, str]:
-    """Load history from whichever source is configured, and say which."""
+def load_data() -> tuple[pd.DataFrame, str, dict]:
+    """Load history from whichever source is configured, and record how.
+
+    The third return value is a diagnostics record. It exists because this
+    function has several ways to legitimately return an empty frame - config
+    absent, query returned nothing, query failed - and the caller previously
+    could not tell them apart. Everything the sidebar needs to explain an empty
+    dashboard is captured here, at the moment it is known.
+    """
     project = os.getenv("BQ_PROJECT")
     dataset = os.getenv("BQ_DATASET")
     table = os.getenv("BQ_TABLE", "test_runs")
 
-    if project and dataset:
+    sa_info, sa_error = read_service_account()
+    try:
+        secret_keys = sorted(st.secrets.keys())
+        secrets_readable = True
+    except Exception:
+        secret_keys, secrets_readable = [], False
+
+    diag: dict = {
+        # Values, not just presence: a typo in a project or dataset name is a
+        # top suspect, and these are identifiers rather than credentials.
+        "BQ_PROJECT": project,
+        "BQ_DATASET": dataset,
+        "BQ_TABLE": table,
+        "bigquery_configured": bool(project and dataset),
+        "secrets_readable": secrets_readable,
+        # Names only. Never values - one of these tables holds a private key.
+        "secret_keys": secret_keys,
+        "service_account_secret_found": sa_info is not None,
+        "service_account_fields": sorted(sa_info.keys()) if sa_info else [],
+        "service_account_error": sa_error,
+        "path": None,
+        "auth_method": None,
+        "rows_returned": None,
+        "exception": None,
+        "jsonl_path": str(DEFAULT_JSONL),
+        "jsonl_exists": DEFAULT_JSONL.exists(),
+    }
+
+    if diag["bigquery_configured"]:
+        diag["path"] = "bigquery"
         try:
             frame, auth_method = load_from_bigquery(project, dataset, table)
-            return frame, f"BigQuery ({dataset}.{table}, via {auth_method})"
+            diag["auth_method"] = auth_method
+            diag["rows_returned"] = len(frame)
+            return frame, f"BigQuery ({dataset}.{table}, via {auth_method})", diag
         except Exception as exc:
+            diag["exception"] = f"{type(exc).__name__}: {exc}"
+            diag["path"] = "bigquery -> failed, fell back to local file"
             st.warning(
                 f"{explain_bigquery_failure(exc)} Falling back to the local export."
             )
+    else:
+        diag["path"] = "local file (BigQuery not configured)"
 
-    return load_from_jsonl(str(DEFAULT_JSONL)), f"local file ({DEFAULT_JSONL.name})"
+    frame = load_from_jsonl(str(DEFAULT_JSONL))
+    diag["rows_returned"] = len(frame)
+    return frame, f"local file ({DEFAULT_JSONL.name})", diag
+
+
+def render_diagnostics(diag: dict) -> None:
+    """Show how the data was (or was not) loaded.
+
+    Always rendered, including when the frame is empty - which is precisely
+    when it is needed. Shows key *names* and booleans only; no secret value is
+    ever displayed.
+    """
+    with st.sidebar:
+        with st.expander("Diagnostics", expanded=not diag.get("rows_returned")):
+            st.markdown(
+                f"**Path taken:** `{diag['path']}`\n\n"
+                f"**Rows returned:** `{diag['rows_returned']}`"
+            )
+
+            st.markdown("**Environment (read at runtime)**")
+            st.markdown(
+                f"- `BQ_PROJECT` = `{diag['BQ_PROJECT'] or '(unset)'}`\n"
+                f"- `BQ_DATASET` = `{diag['BQ_DATASET'] or '(unset)'}`\n"
+                f"- `BQ_TABLE` = `{diag['BQ_TABLE'] or '(unset)'}`\n"
+                f"- BigQuery configured: `{diag['bigquery_configured']}`"
+            )
+
+            st.markdown("**Streamlit secrets** (names only, never values)")
+            st.markdown(
+                f"- readable: `{diag['secrets_readable']}`\n"
+                f"- top-level keys: `{diag['secret_keys'] or '(none)'}`\n"
+                f"- `{SERVICE_ACCOUNT_SECRET}` found: "
+                f"`{diag['service_account_secret_found']}`\n"
+                f"- its fields: `{diag['service_account_fields'] or '(n/a)'}`"
+            )
+            if diag["service_account_error"]:
+                st.error(
+                    "Reading the service-account secret failed: "
+                    f"`{diag['service_account_error']}`"
+                )
+
+            if diag["auth_method"]:
+                st.markdown(f"**Authenticated via:** `{diag['auth_method']}`")
+
+            if diag["exception"]:
+                st.error(f"**Exception caught:** `{diag['exception']}`")
+
+            st.markdown(
+                f"**Local fallback file:** `{diag['jsonl_path']}` "
+                f"(exists: `{diag['jsonl_exists']}`)"
+            )
 
 
 def prepare(frame: pd.DataFrame) -> pd.DataFrame:
@@ -440,14 +548,40 @@ def main() -> None:
         theme = st.radio("Theme", ["light", "dark"], horizontal=True)
     colors = PALETTE[theme]
 
-    raw, source = load_data()
+    raw, source, diag = load_data()
+
+    # Rendered before the early return below. The previous version computed
+    # `source` and then returned without ever showing it, so the one case that
+    # needed an explanation was the one case that got none.
+    render_diagnostics(diag)
+
     if raw.empty:
-        st.info(
-            "No run history yet.\n\n"
-            "Generate some locally with:\n\n"
-            "```\npytest\npython analytics/export_to_bigquery.py --dry-run\n```\n\n"
-            "or set `BQ_PROJECT` and `BQ_DATASET` to read from BigQuery."
-        )
+        # Report the cause rather than asserting one. This message used to say
+        # "or set BQ_PROJECT and BQ_DATASET", which is only correct on one of
+        # the three paths that reach here - and reads as a confident diagnosis
+        # on the other two.
+        if diag["path"].startswith("bigquery") and diag["exception"] is None:
+            st.warning(
+                f"The query against `{diag['BQ_DATASET']}.{diag['BQ_TABLE']}` "
+                "succeeded but returned **zero rows**. The credential and the "
+                "connection are fine - either the table is empty, or "
+                "`BQ_PROJECT`/`BQ_DATASET`/`BQ_TABLE` point somewhere other "
+                "than where the exporter writes. See Diagnostics in the sidebar."
+            )
+        elif diag["exception"] is not None:
+            st.warning(
+                "BigQuery could not be read and the local fallback file is "
+                "absent, so there is nothing to show. The cause is in the "
+                "warning above and in Diagnostics in the sidebar."
+            )
+        else:
+            st.info(
+                "No run history yet, and BigQuery is not configured "
+                f"(`BQ_PROJECT`={diag['BQ_PROJECT'] or 'unset'}, "
+                f"`BQ_DATASET`={diag['BQ_DATASET'] or 'unset'}).\n\n"
+                "Generate some locally with:\n\n"
+                "```\npytest\npython analytics/export_to_bigquery.py --dry-run\n```"
+            )
         return
 
     frame = prepare(raw)

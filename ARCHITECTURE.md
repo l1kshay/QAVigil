@@ -406,15 +406,29 @@ It is pinned in `analytics/requirements.txt`. The CI export step deliberately do
 
 This is the second defect in the same blind spot as §10.17 — the BigQuery read path cannot be exercised without a real dataset, so local verification against the JSONL fallback passed while the deployed path was broken. Both failures degraded quietly rather than loudly, which is the property that let them ship. The `except Exception` in `load_data()` does cover this error class (verified by injecting the exact `ValueError`), so the dashboard falls back to the local export rather than crashing.
 
-### 10.19 Python version is pinned for deployment hosts, but Streamlit Cloud's UI wins
+### 10.19 An empty dashboard must explain itself
+
+Reported from a real deployment: with secrets present and rows confirmed in the table, the dashboard showed only its generic empty-state message.
+
+The cause was structural, not a logic error. `main()` triggered that message on `raw.empty` alone, and its text asserted *one* cause ("or set `BQ_PROJECT` and `BQ_DATASET`") that it had never checked. Three different paths reach an empty frame: BigQuery not configured; a query that succeeds and returns zero rows; and a query that raises, warns, and falls back to a local file that does not exist on Streamlit Cloud. Only the third produces a warning box, so the other two were indistinguishable from each other and from "no data yet".
+
+Worse, the one variable that already held the answer — `source`, which reads `BigQuery (dataset.table, via ...)` or `local file (...)` — was computed immediately before the early `return` that skipped rendering it. **The app computed the diagnosis and discarded it in exactly the case that needed it.**
+
+`render_diagnostics()` now runs before that return and reports: the `BQ_*` values as read from the environment at runtime, whether BigQuery was considered configured, whether `st.secrets` is readable and its top-level key *names*, whether `gcp_service_account` was found and its field *names*, the path taken, the auth method, rows returned, and any exception caught. Key names and booleans only — no secret value is ever displayed. The `BQ_*` identifiers are shown deliberately: spotting a typo is the point, and a project id is not a credential.
+
+`read_service_account()` replaces a bare `except Exception: return None` that made a *malformed* service-account table indistinguishable from an absent one, silently degrading to credentials the host does not have.
+
+One hypothesis worth recording as **disproved**, so it is not re-investigated: Streamlit's secrets-to-`os.environ` promotion is *not* lazy. `bootstrap.py` calls `load_if_toml_exists()` → `_parse()` at server startup, and top-level `str`/`int`/`float` secrets do become environment variables before the script runs (verified empirically). Nested tables correctly do not — which is why the service account is read through `st.secrets` rather than `os.getenv`.
+
+### 10.20 Python version is pinned for deployment hosts, but Streamlit Cloud's UI wins
 
 `runtime.txt` at the repo root pins `python-3.12`, matching CI and local development. It is honoured by hosts that read the convention (Render, Heroku). Streamlit Community Cloud's authoritative setting is the Python selector in its deploy dialog, so the file records intent rather than guaranteeing the version there — stated plainly in `analytics/README.md` so nobody assumes the pin is doing more than it is.
 
-### 10.20 Dashboard chart choices
+### 10.21 Dashboard chart choices
 
 Colours are drawn from a validated palette and checked with a colour-vision-deficiency and contrast validator in both light and dark modes (worst adjacent CVD ΔE 24.7 light / 26.8 dark, all six checks passing). Status meaning always carries a text label, never hue alone; a table view backs every chart. The pass-rate axis is deliberately not zero-based — a suite living between 95% and 100% shows nothing useful on a 0–100 axis — and headline figures are stat tiles rather than charts, because a single value is not a chart.
 
-### 10.21 Manual steps CI cannot perform
+### 10.22 Manual steps CI cannot perform
 
 Publishing to GitHub Pages requires **Settings → Pages → Source: GitHub Actions** to be enabled by a repository admin. The workflow is written and ready; the setting is deliberately not automated, since repository settings are out of scope for this project's tooling.
 
