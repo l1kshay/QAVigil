@@ -133,7 +133,7 @@ QAVigil follows a **layered test-automation architecture** separating four core 
 4. Both layers pull input values from the Test Data layer rather than embedding literals
 5. Test results (pass/fail/skip, with screenshots/traces on UI failure) are collected by the reporting plugin
 6. Allure/HTML report is generated and published as a CI artifact and to GitHub Pages
-7. **(Optional)** A post-run step parses the结果 JSON and appends a row (test name, suite, status, duration, timestamp, flaky flag) to a BigQuery table
+7. **(Optional)** A post-run step parses the results JSON and appends a row (test name, suite, status, duration, timestamp, flaky flag) to a BigQuery table
 8. **(Optional)** Looker Studio/Tableau Public dashboards refresh from BigQuery; the optional Streamlit app queries BigQuery directly and is deployed on Streamlit Community Cloud
 9. On failure, the CI job fails the build/PR check, same signal a real product team would rely on before merging
 
