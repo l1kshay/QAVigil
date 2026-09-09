@@ -388,11 +388,25 @@ A BigQuery outage must not turn a green test run red. The tests' verdict is what
 
 The export step's credential is write-scoped (`bigquery.dataEditor` on the single dataset) and lives in CI secrets; the dashboard's is read-only (`bigquery.dataViewer`) and lives in a deployed web app. Neither should be able to do the other's job. This is section 6's rule, made concrete in `analytics/README.md`.
 
-### 10.17 Dashboard chart choices
+### 10.17 The dashboard authenticates from Streamlit secrets, with ADC as fallback
+
+**This was a defect in the first Phase 7 implementation, found by review rather than by testing.** `dashboard_app.py` read only `os.getenv` and called `bigquery.Client(project=...)`, which relies on Application Default Credentials. Streamlit Community Cloud has none, and there is nowhere to put a key *file*, so a deployed dashboard could never have authenticated. It would have failed, caught its own exception, and silently shown the empty state — the local JSONL verification I ran never exercised that path.
+
+Streamlit promotes only top-level `str`/`int`/`float` secrets into `os.environ`, so `BQ_PROJECT`/`BQ_DATASET`/`BQ_TABLE` were reachable, but a service-account key is a nested TOML table and is not promoted. It has to be read through `st.secrets`.
+
+`build_bigquery_client()` now prefers the `gcp_service_account` secret via `service_account.Credentials.from_service_account_info()`, and falls back to ADC when it is absent — which is the normal case on a laptop with `gcloud auth`, or on a GCP host. `service_account_info()` swallows the exception `st.secrets` raises when no secrets file exists at all, because absence is a supported state, not an error: `streamlit run` must keep working against the local JSONL with no secrets of any kind.
+
+Read-only access is enforced by the credential's `bigquery.dataViewer` IAM role, not by application code. The failure message names which credential was attempted, since "could not read BigQuery" is ambiguous and a missing secret is by far the likeliest cause on a deployed app.
+
+### 10.18 Python version is pinned for deployment hosts, but Streamlit Cloud's UI wins
+
+`runtime.txt` at the repo root pins `python-3.12`, matching CI and local development. It is honoured by hosts that read the convention (Render, Heroku). Streamlit Community Cloud's authoritative setting is the Python selector in its deploy dialog, so the file records intent rather than guaranteeing the version there — stated plainly in `analytics/README.md` so nobody assumes the pin is doing more than it is.
+
+### 10.19 Dashboard chart choices
 
 Colours are drawn from a validated palette and checked with a colour-vision-deficiency and contrast validator in both light and dark modes (worst adjacent CVD ΔE 24.7 light / 26.8 dark, all six checks passing). Status meaning always carries a text label, never hue alone; a table view backs every chart. The pass-rate axis is deliberately not zero-based — a suite living between 95% and 100% shows nothing useful on a 0–100 axis — and headline figures are stat tiles rather than charts, because a single value is not a chart.
 
-### 10.18 Manual steps CI cannot perform
+### 10.20 Manual steps CI cannot perform
 
 Publishing to GitHub Pages requires **Settings → Pages → Source: GitHub Actions** to be enabled by a repository admin. The workflow is written and ready; the setting is deliberately not automated, since repository settings are out of scope for this project's tooling.
 

@@ -126,10 +126,19 @@ Settings → Secrets and variables → Actions:
 | `BQ_PROJECT` | your GCP project id |
 | `BQ_DATASET` | `qavigil` |
 | `BQ_TABLE` | `test_runs` |
-| `BQ_CREDENTIALS_JSON` | the **writer** key's full JSON |
+| `BQ_CREDENTIALS_JSON` | the **writer** key's full JSON, pasted raw — not base64, not a path |
+
+`BQ_TABLE` is optional; the exporter defaults to `test_runs`. The workflow
+writes `BQ_CREDENTIALS_JSON` to a temp file and points
+`GOOGLE_APPLICATION_CREDENTIALS` at it for the life of that step — so
+`GOOGLE_APPLICATION_CREDENTIALS` is *not* itself a secret you create.
 
 The CI export step skips itself entirely when `BQ_PROJECT` is unset, so forks
 and unconfigured clones are unaffected.
+
+The dashboard's **reader** key is not a GitHub secret at all — it lives in
+Streamlit Cloud's own Secrets panel, in a different format. See
+[Streamlit secrets](#streamlit-secrets) below.
 
 ---
 
@@ -159,10 +168,64 @@ The code-owned interactive view — the same three questions, in a repository yo
 control rather than a hosted BI tool's UI.
 
 Deploy to [share.streamlit.io](https://share.streamlit.io): point it at this
-repo, set the main file to `analytics/dashboard_app.py`, and add the **reader**
-credentials under the app's Secrets. This is deliberately separate from the
-GitHub Pages test report — one hosts the per-run report, the other the
-across-run trend.
+repo and set the main file to `analytics/dashboard_app.py`. This is deliberately
+separate from the GitHub Pages test report — one hosts the per-run report, the
+other the across-run trend.
+
+#### Streamlit secrets
+
+Streamlit Community Cloud has **no Application Default Credentials**, so a
+deployed dashboard cannot authenticate the way a laptop with `gcloud auth` does
+— it has to carry its own key, and there is nowhere to put a key *file*. So the
+reader credential is supplied as a Streamlit secret and loaded by
+`build_bigquery_client()` via
+`service_account.Credentials.from_service_account_info()`.
+
+Paste this into the app's **Settings → Secrets** panel (never into the repo):
+
+```toml
+# Top-level strings. Streamlit promotes str/int/float top-level secrets into
+# os.environ, which is how the app's os.getenv() calls see them.
+BQ_PROJECT = "your-gcp-project-id"
+BQ_DATASET = "qavigil"
+BQ_TABLE   = "test_runs"          # optional; defaults to test_runs
+
+# The READER key, as a TOML table. Each key mirrors a field of the downloaded
+# service-account JSON. Nested tables are NOT promoted to os.environ, which is
+# why this one is read through st.secrets rather than os.getenv.
+[gcp_service_account]
+type = "service_account"
+project_id = "..."
+private_key_id = "..."
+private_key = "..."
+client_email = "..."
+client_id = "..."
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "..."
+```
+
+Use the **reader** key here (`bigquery.dataViewer`), never the writer key that
+sits in GitHub Actions secrets. Read-only is enforced by that IAM role, not by
+the app's code.
+
+The `[gcp_service_account]` table is optional. When it is absent the app falls
+back to Application Default Credentials, and when BigQuery is not configured at
+all it reads the local JSONL — so `streamlit run` works on a laptop with no
+secrets file of any kind. The sidebar names which source and which credential
+were actually used, and a failed BigQuery read says which credential it tried.
+
+#### Python version
+
+`runtime.txt` at the repo root pins `python-3.12`, matching CI and local
+development. Note that Streamlit Community Cloud's authoritative setting is the
+**Python version selector in the deploy dialog's Advanced settings** — set it to
+3.12 there. `runtime.txt` records the intended version and is honoured by hosts
+that read the convention (Render, Heroku); do not rely on it alone for
+Streamlit Cloud.
+
+#### Design notes
 
 Its colours were validated for colour-vision deficiency and contrast in both
 light and dark modes; status meaning is always carried by a text label, never
@@ -175,9 +238,12 @@ by hue alone.
 Everything below requires accounts and web UIs, and cannot be done from here:
 
 - [ ] Create the GCP project, dataset, and table (step 1)
-- [ ] Create the two service accounts and download the writer key (step 2)
-- [ ] Add the four repository secrets (step 3)
+- [ ] Create the two service accounts and download both keys (step 2)
+- [ ] Add the repository secrets (step 3) — three are required
+      (`BQ_PROJECT`, `BQ_DATASET`, `BQ_CREDENTIALS_JSON`); `BQ_TABLE` is only
+      needed if the table is not named `test_runs`
 - [ ] Build the Looker Studio report and set its sharing
-- [ ] Deploy the Streamlit app and add the reader credentials to its Secrets
+- [ ] Deploy the Streamlit app: set the Python version to 3.12 in Advanced
+      settings, and add the reader key as `[gcp_service_account]` in its Secrets
 - [ ] Enable GitHub Pages (Settings → Pages → Source: GitHub Actions) — needed
       for the Phase 6 test report, not for analytics

@@ -70,19 +70,66 @@ STATUS_ORDER = ["passed", "flaky", "failed", "skipped"]
 # ---------------------------------------------------------------------------
 # data loading
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=300)
-def load_from_bigquery(project: str, dataset: str, table: str) -> pd.DataFrame:
-    """Read run history from BigQuery. Imported lazily so the JSONL path needs no SDK."""
+#: Streamlit secrets key holding the READ-ONLY service account, as a TOML table
+#: whose keys mirror the downloaded JSON key's fields.
+SERVICE_ACCOUNT_SECRET = "gcp_service_account"
+
+
+def service_account_info() -> dict | None:
+    """The reader service account from Streamlit secrets, or None if absent.
+
+    Absence is a normal, supported state - it is what every local JSONL-only
+    run looks like - so it must never raise. ``st.secrets`` itself throws when
+    no secrets file exists at all, rather than returning empty, which is why
+    the lookup is wrapped.
+    """
+    try:
+        if SERVICE_ACCOUNT_SECRET in st.secrets:
+            return dict(st.secrets[SERVICE_ACCOUNT_SECRET])
+    except Exception:
+        # No secrets.toml, or it is unreadable. Either way: no service account.
+        return None
+    return None
+
+
+def build_bigquery_client(project: str):
+    """A BigQuery client, authenticated however this host allows.
+
+    Streamlit Community Cloud has no Application Default Credentials, so a
+    deployed dashboard must carry its own key - supplied as a Streamlit secret
+    rather than a file, since there is nowhere to put a file. Everywhere else
+    (a laptop with ``gcloud auth``, or a GCP host) ADC is present and no secret
+    is needed, so the secret is preferred when set and ADC is the fallback.
+
+    Read-only access is enforced by the credential's IAM role
+    (``bigquery.dataViewer``), not by this code - see analytics/README.md.
+    """
     from google.cloud import bigquery  # noqa: PLC0415
 
-    client = bigquery.Client(project=project)
+    info = service_account_info()
+    if info is None:
+        return bigquery.Client(project=project), "application default credentials"
+
+    from google.oauth2 import service_account  # noqa: PLC0415 - ships with the BQ client
+
+    credentials = service_account.Credentials.from_service_account_info(info)
+    return (
+        bigquery.Client(credentials=credentials, project=project or credentials.project_id),
+        "service account from Streamlit secrets",
+    )
+
+
+@st.cache_data(ttl=300)
+def load_from_bigquery(project: str, dataset: str, table: str) -> tuple[pd.DataFrame, str]:
+    """Read run history from BigQuery. Imported lazily so the JSONL path needs no SDK."""
+    client, auth_method = build_bigquery_client(project)
     query = f"""
         SELECT run_id, test_name, suite, status, duration_seconds,
                run_timestamp, branch, commit_sha, retry_count, marker
         FROM `{project}.{dataset}.{table}`
         ORDER BY run_timestamp
     """
-    return client.query(query).to_dataframe()
+    return client.query(query).to_dataframe(), auth_method
 
 
 @st.cache_data(ttl=60)
@@ -104,11 +151,21 @@ def load_data() -> tuple[pd.DataFrame, str]:
 
     if project and dataset:
         try:
-            return load_from_bigquery(project, dataset, table), f"BigQuery ({dataset}.{table})"
+            frame, auth_method = load_from_bigquery(project, dataset, table)
+            return frame, f"BigQuery ({dataset}.{table}, via {auth_method})"
         except Exception as exc:
+            # Naming the auth path matters here: "could not read BigQuery" is
+            # ambiguous, and the overwhelmingly likely cause on a deployed app
+            # is a missing or wrong service-account secret rather than a bad
+            # query. Say which credential was attempted.
+            attempted = (
+                "service account from Streamlit secrets"
+                if service_account_info() is not None
+                else f"application default credentials (no '{SERVICE_ACCOUNT_SECRET}' secret set)"
+            )
             st.warning(
-                f"Could not read BigQuery ({type(exc).__name__}: {exc}). "
-                "Falling back to the local export."
+                f"Could not read BigQuery using {attempted} "
+                f"({type(exc).__name__}: {exc}). Falling back to the local export."
             )
 
     return load_from_jsonl(str(DEFAULT_JSONL)), f"local file ({DEFAULT_JSONL.name})"
