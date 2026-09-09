@@ -26,7 +26,9 @@ import requests
 from faker import Faker
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
+from api_clients.auth_client import AuthClient
 from api_clients.base_client import BaseClient
+from api_clients.product_client import ProductClient
 from config.settings import REPORTS_DIR, settings
 from pages.login_page import LoginPage
 
@@ -94,6 +96,18 @@ def api_session() -> Iterator[requests.Session]:
     session.close()
 
 
+@pytest.fixture
+def auth_client(api_session: requests.Session) -> AuthClient:
+    """Account and login endpoints, sharing the test's HTTP session."""
+    return AuthClient(api_session)
+
+
+@pytest.fixture
+def product_client(api_session: requests.Session) -> ProductClient:
+    """Catalogue endpoints, sharing the test's HTTP session."""
+    return ProductClient(api_session)
+
+
 # ----------------------------------------------------------------------
 # test accounts
 # ----------------------------------------------------------------------
@@ -105,20 +119,14 @@ def faker_instance() -> Faker:
 
 
 @pytest.fixture
-def ephemeral_account(faker_instance: Faker) -> Iterator[dict[str, Any]]:
-    """A throwaway account, created before the test and deleted after it.
+def account_payload(faker_instance: Faker) -> dict[str, Any]:
+    """Registration details for a unique account that has *not* been created.
 
-    Registration happens through the site's own API rather than the signup
-    form. That is deliberate: the account is *setup*, not the thing under test,
-    and driving a fifteen-field form through the browser for every checkout
-    test would be slow and would make a checkout failure indistinguishable from
-    a signup failure. The signup UI is still covered directly by its own test.
-
-    The address is unique per test, so tests can run in parallel and in any
-    order without colliding. Teardown deletes the account even if the test
-    fails, so runs do not litter a site shared with other people.
+    Separate from ``ephemeral_account`` because the account-lifecycle tests
+    need to perform the registration themselves - that is the thing they are
+    testing - while every other test just wants an account that already exists.
     """
-    account = {
+    return {
         "name": faker_instance.name(),
         # example.com is reserved for documentation and cannot receive mail,
         # so no real inbox can ever be hit by these registrations.
@@ -140,20 +148,44 @@ def ephemeral_account(faker_instance: Faker) -> Iterator[dict[str, Any]]:
         "mobile_number": faker_instance.numerify("##########"),
     }
 
-    client = BaseClient()
-    created = client.post("createAccount", data=account)
+
+@pytest.fixture
+def registered_account(
+    account_payload: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    """An account created through the API and removed afterwards.
+
+    Teardown is best-effort: a lifecycle test may already have deleted the
+    account itself, and that must not fail the test.
+    """
+    client = AuthClient()
+    created = client.create_account(account_payload)
     if created.status != 201:
         pytest.fail(
             "could not create the test account this test depends on: "
             f"responseCode={created.status}, message={created.message!r}"
         )
 
-    yield account
+    yield account_payload
 
-    client.delete(
-        "deleteAccount",
-        data={"email": account["email"], "password": account["password"]},
-    )
+    client.delete_account(account_payload["email"], account_payload["password"])
+
+
+@pytest.fixture
+def ephemeral_account(registered_account: dict[str, Any]) -> dict[str, Any]:
+    """An existing account for tests that need one but do not manage it.
+
+    Registration happens through the site's own API rather than the signup
+    form. That is deliberate: the account is *setup*, not the thing under test,
+    and driving a fifteen-field form through the browser for every checkout
+    test would be slow, and would make a checkout failure indistinguishable
+    from a signup failure.
+
+    The address is unique per test, so tests can run in parallel and in any
+    order without colliding, and teardown removes the account even when the
+    test fails - runs do not litter a site other people share.
+    """
+    return registered_account
 
 
 @pytest.fixture

@@ -50,10 +50,18 @@ class CheckoutPage(BasePage):
         return self
 
     def place_order(self) -> "PaymentPage":
-        """Move on to payment and return the page object for it."""
+        """Move on to payment and return the page object for it.
+
+        Waits for the card form rather than for the navigation's ``load``
+        event. The load event waits on every subresource, and this site serves
+        ad iframes that can stall well past the timeout under parallel runs -
+        producing a flaky failure even though the page was ready. Waiting for
+        the element the next step actually needs is both faster and truthful
+        about what "ready" means here.
+        """
         self.click(self.PLACE_ORDER)
         payment = PaymentPage(self.page)
-        payment.wait_for_url("/payment")
+        payment.wait_for_visible(payment.NAME_ON_CARD)
         return payment
 
 
@@ -87,8 +95,10 @@ class PaymentPage(BasePage):
     ) -> "PaymentPage":
         """Submit the card form and wait for the confirmation page.
 
-        The site redirects to /payment_done/<amount> on success, so the wait is
-        on that URL rather than on an arbitrary element appearing.
+        The site redirects to /payment_done/<amount> on success. The wait is on
+        the confirmation block appearing rather than on the navigation's load
+        event, for the same reason as CheckoutPage.place_order: third-party
+        subresources on this demo site can outlast the timeout under load.
         """
         self.fill(self.NAME_ON_CARD, name_on_card)
         self.fill(self.CARD_NUMBER, card_number)
@@ -96,7 +106,7 @@ class PaymentPage(BasePage):
         self.fill(self.EXPIRY_MONTH, expiry_month)
         self.fill(self.EXPIRY_YEAR, expiry_year)
         self.click(self.PAY_BUTTON)
-        self.wait_for_url("/payment_done/")
+        self.wait_for_visible(self.CONFIRMATION)
         return self
 
     @property

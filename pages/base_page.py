@@ -101,8 +101,19 @@ class BasePage:
         return self.page.title()
 
     def wait_for_url(self, url_substring: str) -> None:
-        """Block until the address bar contains ``url_substring``."""
-        self.page.wait_for_url(f"**{url_substring}**")
+        """Block until the address bar contains ``url_substring``.
+
+        Waits for ``commit`` - the point at which the browser has accepted the
+        new document - rather than the default ``load``. ``load`` also waits on
+        every subresource, and this site embeds third-party ad frames that can
+        outlast the timeout when several browsers run in parallel, turning a
+        perfectly good navigation into a flaky failure.
+
+        Nothing is lost by not waiting for ``load``: every locator call
+        auto-waits for its own element, so readiness is enforced where it
+        actually matters.
+        """
+        self.page.wait_for_url(f"**{url_substring}**", wait_until="commit")
 
     # ------------------------------------------------------------------
     # interaction - each of these auto-waits for actionability
