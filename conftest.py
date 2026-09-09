@@ -18,13 +18,17 @@ Phase 5; this module deliberately stops at the fixtures Phase 1 calls for.
 
 from __future__ import annotations
 
-from typing import Iterator
+import uuid
+from typing import Any, Iterator
 
 import pytest
 import requests
+from faker import Faker
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
+from api_clients.base_client import BaseClient
 from config.settings import REPORTS_DIR, settings
+from pages.login_page import LoginPage
 
 # Identifies our traffic to the target site rather than sending a bare
 # python-requests default, which some hosts reject outright.
@@ -88,3 +92,75 @@ def api_session() -> Iterator[requests.Session]:
     session.headers.update({"User-Agent": USER_AGENT})
     yield session
     session.close()
+
+
+# ----------------------------------------------------------------------
+# test accounts
+# ----------------------------------------------------------------------
+@pytest.fixture(scope="session")
+def faker_instance() -> Faker:
+    """One Faker for the session. Seeded per-call, never globally, so tests
+    stay independent rather than depending on a shared sequence."""
+    return Faker()
+
+
+@pytest.fixture
+def ephemeral_account(faker_instance: Faker) -> Iterator[dict[str, Any]]:
+    """A throwaway account, created before the test and deleted after it.
+
+    Registration happens through the site's own API rather than the signup
+    form. That is deliberate: the account is *setup*, not the thing under test,
+    and driving a fifteen-field form through the browser for every checkout
+    test would be slow and would make a checkout failure indistinguishable from
+    a signup failure. The signup UI is still covered directly by its own test.
+
+    The address is unique per test, so tests can run in parallel and in any
+    order without colliding. Teardown deletes the account even if the test
+    fails, so runs do not litter a site shared with other people.
+    """
+    account = {
+        "name": faker_instance.name(),
+        # example.com is reserved for documentation and cannot receive mail,
+        # so no real inbox can ever be hit by these registrations.
+        "email": f"qavigil.{uuid.uuid4().hex[:12]}@example.com",
+        "password": faker_instance.password(length=12),
+        "title": "Mr",
+        "birth_date": "1",
+        "birth_month": "1",
+        "birth_year": "1990",
+        "firstname": faker_instance.first_name(),
+        "lastname": faker_instance.last_name(),
+        "company": faker_instance.company(),
+        "address1": faker_instance.street_address(),
+        "address2": "",
+        "country": "India",
+        "zipcode": faker_instance.postcode(),
+        "state": faker_instance.city(),
+        "city": faker_instance.city(),
+        "mobile_number": faker_instance.numerify("##########"),
+    }
+
+    client = BaseClient()
+    created = client.post("createAccount", data=account)
+    if created.status != 201:
+        pytest.fail(
+            "could not create the test account this test depends on: "
+            f"responseCode={created.status}, message={created.message!r}"
+        )
+
+    yield account
+
+    client.delete(
+        "deleteAccount",
+        data={"email": account["email"], "password": account["password"]},
+    )
+
+
+@pytest.fixture
+def logged_in_page(page: Page, ephemeral_account: dict[str, Any]) -> Page:
+    """A browser page already signed in as a freshly created account."""
+    login = LoginPage(page)
+    login.open()
+    login.login_as(ephemeral_account["email"], ephemeral_account["password"])
+    login.wait_for_visible(login.header.LOGOUT)
+    return page

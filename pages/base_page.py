@@ -19,6 +19,56 @@ from playwright.sync_api import Locator, Page, expect
 from config.settings import SCREENSHOTS_DIR, settings
 
 
+class Header:
+    """The site-wide navigation bar.
+
+    Every page on automationexercise.com carries the same header, so it lives
+    here as a component rather than being duplicated across five page objects.
+    Which links are present is itself the site's signal of auth state: logged
+    out shows "Signup / Login", logged in swaps it for Logout, Delete Account
+    and a "Logged in as <name>" label.
+    """
+
+    SIGNUP_LOGIN = "a[href='/login']"
+    LOGOUT = "a[href='/logout']"
+    DELETE_ACCOUNT = "a[href='/delete_account']"
+    HOME = "ul.nav.navbar-nav a[href='/']"
+    PRODUCTS = "ul.nav.navbar-nav a[href='/products']"
+    CART = "ul.nav.navbar-nav a[href='/view_cart']"
+    LOGGED_IN_AS = "ul.nav.navbar-nav a:has-text('Logged in as')"
+
+    def __init__(self, page: Page) -> None:
+        self.page = page
+
+    def go_home(self) -> None:
+        self.page.locator(self.HOME).first.click()
+
+    def go_to_products(self) -> None:
+        self.page.locator(self.PRODUCTS).first.click()
+
+    def go_to_cart(self) -> None:
+        self.page.locator(self.CART).first.click()
+
+    def go_to_login(self) -> None:
+        self.page.locator(self.SIGNUP_LOGIN).first.click()
+
+    def logout(self) -> None:
+        self.page.locator(self.LOGOUT).first.click()
+
+    @property
+    def is_logged_in(self) -> bool:
+        """Auth state as the site itself reports it."""
+        return self.page.locator(self.LOGOUT).count() > 0
+
+    @property
+    def logged_in_username(self) -> str:
+        """The name shown in "Logged in as <name>", or "" when logged out."""
+        label = self.page.locator(self.LOGGED_IN_AS)
+        if label.count() == 0:
+            return ""
+        return label.first.inner_text().replace("Logged in as", "").strip()
+
+
 class BasePage:
     """Common navigation, interaction and query behaviour for all pages.
 
@@ -32,6 +82,7 @@ class BasePage:
 
     def __init__(self, page: Page) -> None:
         self.page = page
+        self.header = Header(page)
 
     # ------------------------------------------------------------------
     # navigation
