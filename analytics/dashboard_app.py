@@ -143,6 +143,68 @@ def load_from_jsonl(path_str: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# Exception class names that mean "the credential was missing, rejected, or
+# insufficient". Matched by name so this module never has to import google.auth
+# just to classify an error.
+_AUTH_ERROR_NAMES = frozenset({
+    "DefaultCredentialsError",
+    "RefreshError",
+    "TransportError",
+    "Forbidden",
+    "Unauthorized",
+    "PermissionDenied",
+    "Unauthenticated",
+})
+
+
+def explain_bigquery_failure(exc: Exception) -> str:
+    """Say what actually went wrong, rather than blaming the credential.
+
+    The first version of this warning named the attempted credential for
+    *every* failure. That is actively misleading, and it cost real time: a
+    missing ``db-dtypes`` package surfaced as "could not read BigQuery using
+    service account from Streamlit secrets", sending the reader to re-check a
+    key that was working perfectly. Each cause gets its own sentence, and only
+    the auth case mentions credentials.
+    """
+    name = type(exc).__name__
+    text = str(exc)
+
+    # google-cloud-bigquery raises a bare ValueError from to_dataframe() when
+    # an optional extra is missing. It reads like a runtime fault but is a
+    # packaging one, and it is emphatically not an auth problem.
+    if isinstance(exc, ModuleNotFoundError) or "Please install" in text:
+        return (
+            f"A required Python package is missing ({name}: {text}). "
+            "This is a dependency problem, not a credential one - install "
+            "`analytics/requirements.txt` in the deployment environment."
+        )
+
+    if name in _AUTH_ERROR_NAMES or " 401 " in text or " 403 " in text:
+        attempted = (
+            f"the service account in the `{SERVICE_ACCOUNT_SECRET}` Streamlit secret"
+            if service_account_info() is not None
+            else (
+                "application default credentials - no "
+                f"`{SERVICE_ACCOUNT_SECRET}` secret is set, and this host may not have any"
+            )
+        )
+        return (
+            f"BigQuery rejected the credential ({name}: {text}). "
+            f"It tried {attempted}. Check the key is the read-only one and that "
+            "it has `bigquery.dataViewer` on this dataset plus `bigquery.jobUser`."
+        )
+
+    if name == "NotFound":
+        return (
+            f"BigQuery could not find the table ({name}: {text}). "
+            "Check BQ_PROJECT, BQ_DATASET and BQ_TABLE - the credential "
+            "authenticated, so this is a configuration problem, not an auth one."
+        )
+
+    return f"Could not read BigQuery ({name}: {text})."
+
+
 def load_data() -> tuple[pd.DataFrame, str]:
     """Load history from whichever source is configured, and say which."""
     project = os.getenv("BQ_PROJECT")
@@ -154,18 +216,8 @@ def load_data() -> tuple[pd.DataFrame, str]:
             frame, auth_method = load_from_bigquery(project, dataset, table)
             return frame, f"BigQuery ({dataset}.{table}, via {auth_method})"
         except Exception as exc:
-            # Naming the auth path matters here: "could not read BigQuery" is
-            # ambiguous, and the overwhelmingly likely cause on a deployed app
-            # is a missing or wrong service-account secret rather than a bad
-            # query. Say which credential was attempted.
-            attempted = (
-                "service account from Streamlit secrets"
-                if service_account_info() is not None
-                else f"application default credentials (no '{SERVICE_ACCOUNT_SECRET}' secret set)"
-            )
             st.warning(
-                f"Could not read BigQuery using {attempted} "
-                f"({type(exc).__name__}: {exc}). Falling back to the local export."
+                f"{explain_bigquery_failure(exc)} Falling back to the local export."
             )
 
     return load_from_jsonl(str(DEFAULT_JSONL)), f"local file ({DEFAULT_JSONL.name})"
