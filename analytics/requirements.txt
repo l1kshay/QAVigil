@@ -14,3 +14,12 @@ google-cloud-bigquery==3.45.0
 streamlit==1.63.0
 pandas==3.0.5
 altair==6.2.2
+# Required by the dashboard's BigQuery -> DataFrame conversion. It is NOT a
+# hard dependency of google-cloud-bigquery: that package imports it optionally
+# and only raises "Please install the 'db-dtypes' package" when
+# RowIterator.to_dataframe() is actually called. Nothing catches that at import
+# time, so a deploy looks fine until someone opens a chart.
+#
+# The CI export step does not need it - export_to_bigquery.py uses
+# insert_rows_json and never touches pandas.
+db-dtypes==1.7.1

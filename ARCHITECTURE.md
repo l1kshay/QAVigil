@@ -398,15 +398,23 @@ Streamlit promotes only top-level `str`/`int`/`float` secrets into `os.environ`,
 
 Read-only access is enforced by the credential's `bigquery.dataViewer` IAM role, not by application code. The failure message names which credential was attempted, since "could not read BigQuery" is ambiguous and a missing secret is by far the likeliest cause on a deployed app.
 
-### 10.18 Python version is pinned for deployment hosts, but Streamlit Cloud's UI wins
+### 10.18 `db-dtypes` is an explicit dependency of the dashboard
+
+`google-cloud-bigquery` imports `db-dtypes` *optionally* and raises `ValueError: Please install the 'db-dtypes' package` only when `RowIterator.to_dataframe()` is actually called. Nothing surfaces at import time, so a deploy looks healthy right up until someone opens a chart — which is exactly how it was found, in a real deployment rather than in testing.
+
+It is pinned in `analytics/requirements.txt`. The CI export step deliberately does not install it: `export_to_bigquery.py` uses `insert_rows_json` and never touches pandas.
+
+This is the second defect in the same blind spot as §10.17 — the BigQuery read path cannot be exercised without a real dataset, so local verification against the JSONL fallback passed while the deployed path was broken. Both failures degraded quietly rather than loudly, which is the property that let them ship. The `except Exception` in `load_data()` does cover this error class (verified by injecting the exact `ValueError`), so the dashboard falls back to the local export rather than crashing.
+
+### 10.19 Python version is pinned for deployment hosts, but Streamlit Cloud's UI wins
 
 `runtime.txt` at the repo root pins `python-3.12`, matching CI and local development. It is honoured by hosts that read the convention (Render, Heroku). Streamlit Community Cloud's authoritative setting is the Python selector in its deploy dialog, so the file records intent rather than guaranteeing the version there — stated plainly in `analytics/README.md` so nobody assumes the pin is doing more than it is.
 
-### 10.19 Dashboard chart choices
+### 10.20 Dashboard chart choices
 
 Colours are drawn from a validated palette and checked with a colour-vision-deficiency and contrast validator in both light and dark modes (worst adjacent CVD ΔE 24.7 light / 26.8 dark, all six checks passing). Status meaning always carries a text label, never hue alone; a table view backs every chart. The pass-rate axis is deliberately not zero-based — a suite living between 95% and 100% shows nothing useful on a 0–100 axis — and headline figures are stat tiles rather than charts, because a single value is not a chart.
 
-### 10.20 Manual steps CI cannot perform
+### 10.21 Manual steps CI cannot perform
 
 Publishing to GitHub Pages requires **Settings → Pages → Source: GitHub Actions** to be enabled by a repository admin. The workflow is written and ready; the setting is deliberately not automated, since repository settings are out of scope for this project's tooling.
 
