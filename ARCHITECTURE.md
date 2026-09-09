@@ -287,3 +287,85 @@ Build the BigQuery export step into the CI workflow, connect Looker Studio (and 
 - Use Power BI, Tableau, Looker Studio, and BigQuery **only** when building the optional Phase 7 analytics layer — never introduce them into the core UI/API testing framework.
 - Before starting Phase 7, check for and use any relevant **Claude Code skills or plugins** already available in this environment (e.g., data-analysis, xlsx, or BI-related skills) rather than writing everything from scratch — but confirm with me before adding a new plugin/skill dependency to the project.
 - If a genuinely better-fitting tool or skill becomes available mid-project, propose the change and reasoning before switching — don't silently substitute tools from this plan.
+
+---
+
+## 10. Implementation Decisions Log
+
+Decisions taken while building Phases 1–6 that this plan did not settle in advance. Recorded here so the reasoning survives, rather than living only in commit messages.
+
+### 10.1 The target API reports status in the response body, not the HTTP status
+
+**Discovered:** Phase 1, verifying the API against `/api_list` before writing any tests.
+
+automationexercise.com answers **every** request with `HTTP 200` and puts the real outcome in the JSON body's `responseCode` field. A missing parameter returns `HTTP 200` with `{"responseCode": 400, "message": "Bad request, ..."}`. Even an unsupported HTTP method returns `HTTP 200` with `responseCode: 405`.
+
+This is load-bearing, not a curiosity. A suite asserting on `response.status_code` would see 200 everywhere, and **every negative test would pass without testing anything**.
+
+**Decision:** `ApiResponse.status` resolves to the body's `responseCode`; `http_status` is kept separately for the rare assertion that cares about the transport layer. The assumption is asserted explicitly in `tests/api/test_negative_cases.py::test_errors_are_reported_in_the_body_not_the_http_status`, so if the site ever adopts real status codes, that test fails loudly rather than the negative suite silently going green.
+
+### 10.2 Search matches product category, not only name
+
+**Discovered:** Phase 2, via a legitimately failing test.
+
+Searching `dress` returns items such as "Sleeves Top and Short - Blue & Pink" whose *name* lacks the word but whose *category* is Dress. An early UI test asserted every result name contained the term; it was encoding a false assumption about the feature.
+
+**Decision:** the UI test now asserts a true property (searching a product's own name returns it). Category-level relevance is asserted in the API suite, where the `category` field actually exists — the UI's listing grid does not show it. Recorded in `test_data/products.json` as a `matches_by` field so it is not rediscovered by another failing test.
+
+### 10.3 Test accounts are created through the API, not the signup UI
+
+Registration is *setup* for the checkout and login journeys, not the thing under test. Driving a fifteen-field signup form through the browser for every checkout test would be slow, and would make a checkout failure indistinguishable from a signup failure.
+
+**Decision:** the `registered_account` fixture creates a unique account through the site's own API and deletes it in teardown — even when the test fails, so runs leave no litter on a site other people share. Each account is unique, which is what lets tests run in parallel and in any order.
+
+### 10.4 Fixture scoping favours independence over speed
+
+The browser *process* is session-scoped, because launching one is expensive and it carries no test state. The browser **context**, the page, and the `requests` session are all function-scoped, so cookies and storage cannot leak between tests.
+
+This is the concrete mechanism behind rule 3 (test independence) and is what makes `pytest -n` safe. Verified by running the full suite across four parallel workers.
+
+### 10.5 Waits target `commit`, never `load`
+
+**Discovered:** Phase 3, as a flaky failure under 4-way parallelism.
+
+`wait_for_url` originally waited for the navigation's `load` event, which also waits on every subresource. This site embeds third-party ad frames that outlast a 30-second timeout under concurrent load, failing navigations that had actually succeeded.
+
+**Decision:** `BasePage.wait_for_url` waits for `commit`; checkout and payment wait for the element the next step needs. Nothing is lost, because every Playwright locator call auto-waits for its own element. This turned one flaky failure into three consecutive clean parallel runs and made the suite 25% faster.
+
+### 10.6 Response schemas live in `api_clients/`, not `test_data/`
+
+JSON Schemas are not test *inputs* — they are the contract the API is expected to honour, and they belong to the layer that speaks to it. Each was derived from live responses rather than the site's prose documentation, which is why `price` is typed as a string (`"Rs. 500"`) rather than the number one might wish for.
+
+### 10.7 Test data is loaded at import time, not through a fixture
+
+`@pytest.mark.parametrize` needs its cases at *collection* time, before any fixture runs. A fixture-based loader would force every data-driven test into a loop inside one test function, collapsing a dozen independent cases into a single pass/fail. `test_data/loader.py` loads at import and caches; `case_ids()` surfaces each record's `id` so failures read `sql-injection-attempt` rather than `case2`.
+
+### 10.8 Failure artifacts are captured in the `call` phase, not fixture teardown
+
+The obvious place is fixture teardown, and that was the first implementation. But Allure files teardown attachments under the fixture's "Tear down" container, putting the screenshot two clicks away from the failure it explains — verified against the generated result JSON.
+
+**Decision:** capture happens in `pytest_runtest_makereport` during the call phase, where the page is still open and Allure attributes attachments to the test itself. Capture never raises: if the browser has already crashed, the problem is attached as a note rather than thrown, so a diagnostic failure cannot mask the real one.
+
+### 10.9 Additions to the stack
+
+| Addition | Why |
+|---|---|
+| `pytest-rerunfailures` | The project's goal of separating real failures from flaky ones needs a mechanism. A test that fails then passes on rerun is the definition of flaky. Enabled in CI (`--reruns 1`), not locally. |
+| `.gitattributes` | Development is on Windows, CI on Linux. Without LF normalization every commit carries CRLF into the repository and diffs fill with whole-file changes. |
+| `test_data/checkout.yaml` | The data design in section 4 predates the checkout journey; card and order inputs needed a home to satisfy the no-hardcoded-inputs rule. |
+
+### 10.10 Documentation naming
+
+Section 3's folder structure listed `CLAUDE.md`; the build instructions call for `ARCHITECTURE.md`. These are different artifacts — one is agent instructions, the other a design record.
+
+**Decision:** this file, renamed from `QAVigil_Architecture_Plan.md` to `ARCHITECTURE.md`, is the single design record. No `CLAUDE.md` is maintained.
+
+### 10.11 Python version
+
+The plan says "Python 3.11+". Three interpreters were available locally (3.11, 3.12, 3.14).
+
+**Decision:** 3.12. It is in-spec, every pinned dependency has stable wheels for it, and it is a first-class GitHub Actions runner version, so local and CI agree. 3.14 was avoided as too new for the dependency set.
+
+### 10.12 Manual steps CI cannot perform
+
+Publishing to GitHub Pages requires **Settings → Pages → Source: GitHub Actions** to be enabled by a repository admin. The workflow is written and ready; the setting is deliberately not automated, since repository settings are out of scope for this project's tooling.

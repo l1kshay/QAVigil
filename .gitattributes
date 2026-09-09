@@ -1,0 +1,22 @@
+# Normalize line endings.
+#
+# Development happens on Windows and CI runs on Linux. Without this, every file
+# committed from Windows carries CRLF into the repository, and diffs fill with
+# whole-file changes that hide the real ones. Storing LF in the repository and
+# letting Git check out the platform's native ending keeps both sides happy.
+* text=auto eol=lf
+
+# Shell scripts must keep LF even when checked out on Windows - CRLF breaks the
+# shebang line on Linux.
+*.sh text eol=lf
+
+# Binary files Git must never try to normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.woff binary
+*.woff2 binary

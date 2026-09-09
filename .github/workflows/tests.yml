@@ -1,0 +1,161 @@
+name: tests
+
+# Fast feedback on every push, full coverage where it is worth the minutes.
+#
+#   push          -> smoke only. A push should tell you within a couple of
+#                    minutes whether you broke something obvious.
+#   pull_request  -> the full regression suite, because a merge is the last
+#                    cheap moment to catch a regression.
+#   schedule      -> the full suite nightly. The target is a live third-party
+#                    site, so it can break without anyone touching this repo,
+#                    and a nightly run is what surfaces that.
+#   workflow_dispatch -> whatever you pick, for debugging.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # 03:00 UTC daily.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      marker:
+        description: Which subset to run
+        type: choice
+        options: [smoke, regression, all]
+        default: all
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes an in-flight run pointless. Cancel it -
+# but never cancel a scheduled or main-branch run, whose report we publish.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: ${{ github.event_name == 'push' && 'smoke' || 'regression' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Cache the browser binaries; they are ~150MB and unchanged between runs
+      # unless the pinned Playwright version moves.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright browsers
+        run: python -m playwright install --with-deps chromium
+
+      - name: Decide which tests to run
+        id: scope
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "marker=smoke" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "marker=${{ inputs.marker }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "marker=regression" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run tests
+        id: pytest
+        env:
+          BASE_URL: https://automationexercise.com
+          API_BASE_URL: https://automationexercise.com/api
+          BROWSER: chromium
+          HEADLESS: "true"
+          # Optional. The suite creates and deletes its own accounts, so these
+          # are not required; they are wired up to show the pattern and to let
+          # a fork point the suite at an account it owns.
+          TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
+          TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
+        run: |
+          if [ "${{ steps.scope.outputs.marker }}" = "all" ]; then
+            MARKER_ARG=""
+          else
+            MARKER_ARG="-m ${{ steps.scope.outputs.marker }}"
+          fi
+          # --reruns 1: a test that fails then passes is flaky, not a
+          # regression. This is what lets the report tell them apart instead of
+          # a person guessing. A genuine failure still fails both attempts and
+          # still fails the build.
+          python -m pytest $MARKER_ARG \
+            -n 2 \
+            --reruns 1 --reruns-delay 3 \
+            -ra --tb=short
+
+      # Reports must be published even when tests fail - that is precisely when
+      # someone needs them.
+      - name: Generate Allure report
+        if: always()
+        run: |
+          npm install -g allure-commandline --silent
+          allure generate reports/allure-results --clean -o reports/allure-report
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.run_number }}
+          path: |
+            reports/allure-report
+            reports/report.html
+          retention-days: 30
+
+      # Screenshots and traces only exist when a UI test failed, so this step
+      # is skipped on a green run rather than uploading an empty artifact.
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-artifacts-${{ github.run_number }}
+          path: |
+            reports/screenshots
+            reports/traces
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload report for Pages
+        if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: reports/allure-report
+
+  # Publishing is a separate job so a red test run still publishes its report -
+  # the report of a failing run is the one worth reading.
+  publish-report:
+    name: publish report to GitHub Pages
+    needs: test
+    if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
