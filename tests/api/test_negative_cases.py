@@ -1,19 +1,27 @@
 """API tests for error handling: bad input, missing resources, wrong verbs.
 
+Every case is a record in test_data/edge_cases.yaml or users.yaml, so adding
+coverage for a new failure mode is a data edit, not a code change.
+
 These are the tests that would pass vacuously if the suite asserted on HTTP
-status codes. Every request here comes back as HTTP 200; the real status is
-in the body, and ``ApiResponse.status`` reads it from there. The first test
-below guards that assumption explicitly so the rest cannot quietly stop
-testing anything.
+status codes. Every request here comes back as HTTP 200; the real status is in
+the body, and ``ApiResponse.status`` reads it from there. The first test below
+guards that premise explicitly so the rest cannot quietly stop testing
+anything.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from api_clients.auth_client import AuthClient
-from api_clients.product_client import ProductClient
 from api_clients.schemas import MESSAGE_SCHEMA
+from test_data import loader as test_data
+
+EDGE_CASES = test_data.edge_cases()
+MISSING_PARAMS = EDGE_CASES["missing_parameters"]
+UNSUPPORTED_METHODS = EDGE_CASES["unsupported_methods"]
+UNKNOWN_RESOURCES = EDGE_CASES["unknown_resources"]
+API_LOGIN_PAYLOADS = test_data.users()["api_login_payloads"]
 
 
 @pytest.mark.smoke
@@ -35,43 +43,44 @@ def test_errors_are_reported_in_the_body_not_the_http_status(product_client) -> 
 
 
 # ----------------------------------------------------------------------
-# missing or malformed parameters -> 400
+# required parameters omitted -> 400
 # ----------------------------------------------------------------------
 @pytest.mark.regression
-def test_search_without_a_term_is_a_bad_request(product_client) -> None:
-    """searchProduct requires its search_product parameter."""
-    response = product_client.search_raw({})
-
-    response.assert_status(400)
-    assert response.message == ProductClient.SEARCH_PARAM_MISSING
-
-
-@pytest.mark.regression
 @pytest.mark.parametrize(
-    "payload, case",
-    [
-        ({"password": "some-password"}, "email missing"),
-        ({"email": "someone@example.com"}, "password missing"),
-        ({}, "both missing"),
-    ],
-    ids=["email-missing", "password-missing", "both-missing"],
+    "case", MISSING_PARAMS, ids=test_data.case_ids(MISSING_PARAMS)
 )
-def test_verify_login_requires_both_credentials(auth_client, payload, case) -> None:
-    """verifyLogin rejects an incomplete credential pair."""
-    response = auth_client.verify_login_raw(payload)
+def test_omitting_a_required_parameter_is_a_bad_request(
+    auth_client, product_client, case
+) -> None:
+    """Each endpoint rejects a request that leaves out a required field."""
+    senders = {
+        "searchProduct": lambda: product_client.search_raw({}),
+        "getUserDetailByEmail": lambda: auth_client.get_user_raw({}),
+    }
+    send = senders.get(case["endpoint"])
+    assert send is not None, f"no sender wired up for endpoint {case['endpoint']!r}"
 
-    assert response.status == 400, (
-        f"expected 400 when {case}, got {response.status} "
-        f"({response.message!r})"
+    response = send()
+
+    assert response.status == case["expected_status"], (
+        f"case {case['id']}: omitting {case['input_field']!r} from "
+        f"{case['endpoint']} returned {response.status}, expected "
+        f"{case['expected_status']} ({case['expected_behavior'].strip()})"
     )
 
 
 @pytest.mark.regression
-def test_get_user_without_an_email_is_a_bad_request(auth_client) -> None:
-    """getUserDetailByEmail requires its email parameter."""
-    response = auth_client.get_user_raw({})
+@pytest.mark.parametrize(
+    "case", API_LOGIN_PAYLOADS, ids=test_data.case_ids(API_LOGIN_PAYLOADS)
+)
+def test_verify_login_requires_both_credentials(auth_client, case) -> None:
+    """verifyLogin rejects an incomplete credential pair."""
+    response = auth_client.verify_login_raw(case["payload"])
 
-    response.assert_status(400)
+    assert response.status == case["expected_status"], (
+        f"case {case['id']}: {case['description']} - got {response.status} "
+        f"({response.message!r})"
+    )
 
 
 @pytest.mark.regression
@@ -83,11 +92,36 @@ def test_error_responses_explain_themselves(product_client) -> None:
 
 
 # ----------------------------------------------------------------------
-# unknown resources -> 404
+# resources that do not exist -> 404
 # ----------------------------------------------------------------------
 @pytest.mark.regression
-def test_unknown_account_lookup_is_not_found(auth_client) -> None:
-    """An address with no account behind it reports 404, not an empty user."""
+@pytest.mark.parametrize(
+    "case", UNKNOWN_RESOURCES, ids=test_data.case_ids(UNKNOWN_RESOURCES)
+)
+def test_unknown_resources_are_not_found(auth_client, case) -> None:
+    """Operating on an account that does not exist is refused."""
+    senders = {
+        "getUserDetailByEmail": lambda: auth_client.get_user_by_email(
+            case["input_value"]
+        ),
+        "deleteAccount": lambda: auth_client.delete_account(
+            case["input_value"], "irrelevant-password"
+        ),
+    }
+    send = senders.get(case["endpoint"])
+    assert send is not None, f"no sender wired up for endpoint {case['endpoint']!r}"
+
+    response = send()
+
+    assert response.status == case["expected_status"], (
+        f"case {case['id']}: {case['expected_behavior'].strip()} - got "
+        f"{response.status}"
+    )
+
+
+@pytest.mark.regression
+def test_a_not_found_lookup_returns_no_user_payload(auth_client) -> None:
+    """A 404 carries no user object, rather than an empty shell of one."""
     response = auth_client.get_user_by_email("no-such-user@qavigil.invalid")
 
     response.assert_status(404)
@@ -96,56 +130,30 @@ def test_unknown_account_lookup_is_not_found(auth_client) -> None:
     )
 
 
-@pytest.mark.regression
-def test_deleting_an_unknown_account_is_not_found(auth_client) -> None:
-    """Deleting an account that never existed is refused."""
-    response = auth_client.delete_account(
-        "no-such-user@qavigil.invalid", "irrelevant-password"
-    )
-
-    assert response.status == 404, (
-        f"expected 404 deleting a non-existent account, got {response.status}"
-    )
-
-
 # ----------------------------------------------------------------------
 # unsupported HTTP verbs -> 405
 # ----------------------------------------------------------------------
 @pytest.mark.regression
-@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
-def test_products_list_rejects_write_methods(product_client, method) -> None:
-    """The catalogue is read-only; write verbs are refused."""
-    response = product_client.products_list_with_method(method)
+@pytest.mark.parametrize(
+    "case", UNSUPPORTED_METHODS, ids=test_data.case_ids(UNSUPPORTED_METHODS)
+)
+def test_unsupported_http_methods_are_rejected(
+    auth_client, product_client, case
+) -> None:
+    """Each endpoint refuses the verbs it does not implement."""
+    senders = {
+        "productsList": product_client.products_list_with_method,
+        "brandsList": product_client.brands_list_with_method,
+        "searchProduct": product_client.search_with_method,
+        "verifyLogin": auth_client.verify_login_with_method,
+    }
+    send = senders.get(case["endpoint"])
+    assert send is not None, f"no sender wired up for endpoint {case['endpoint']!r}"
 
-    assert response.status == 405, (
-        f"{method} on productsList returned {response.status}, expected 405"
+    response = send(case["input_value"])
+
+    assert response.status == case["expected_status"], (
+        f"case {case['id']}: {case['input_value']} on {case['endpoint']} "
+        f"returned {response.status}, expected {case['expected_status']}"
     )
-    assert response.message == ProductClient.METHOD_NOT_SUPPORTED
-
-
-@pytest.mark.regression
-@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
-def test_brands_list_rejects_write_methods(product_client, method) -> None:
-    """The brands list is read-only; write verbs are refused."""
-    response = product_client.brands_list_with_method(method)
-
-    assert response.status == 405, (
-        f"{method} on brandsList returned {response.status}, expected 405"
-    )
-
-
-@pytest.mark.regression
-def test_search_rejects_get(product_client) -> None:
-    """searchProduct is POST-only."""
-    response = product_client.search_with_method("GET")
-
-    response.assert_status(405)
-
-
-@pytest.mark.regression
-def test_verify_login_rejects_delete(auth_client) -> None:
-    """verifyLogin does not accept DELETE."""
-    response = auth_client.verify_login_with_method("DELETE")
-
-    response.assert_status(405)
-    assert response.message == AuthClient.METHOD_NOT_SUPPORTED
+    assert response.message == case["expected_behavior"]

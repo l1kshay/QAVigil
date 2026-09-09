@@ -1,0 +1,102 @@
+# Boundary and negative-case inputs for the API tests.
+#
+# Field names follow the data design in ARCHITECTURE.md section 4:
+# input_field / input_value / expected_behavior, with the endpoint and the
+# expected_status alongside.
+#
+# Every expected_status here is the value the API reports in the response
+# BODY's responseCode field, not the HTTP status - this target answers every
+# request with HTTP 200. See api_clients/base_client.py.
+
+# --- required parameters omitted -> 400 --------------------------------
+missing_parameters:
+  - id: search-without-term
+    endpoint: searchProduct
+    input_field: search_product
+    input_value: null
+    expected_status: 400
+    expected_behavior: >-
+      Bad request, search_product parameter is missing in POST request.
+
+  - id: user-lookup-without-email
+    endpoint: getUserDetailByEmail
+    input_field: email
+    input_value: null
+    expected_status: 400
+    expected_behavior: >-
+      Bad request, email parameter is missing in GET request.
+
+# --- wrong HTTP verb -> 405 --------------------------------------------
+unsupported_methods:
+  - id: post-to-products-list
+    endpoint: productsList
+    input_field: http_method
+    input_value: POST
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+  - id: put-to-products-list
+    endpoint: productsList
+    input_field: http_method
+    input_value: PUT
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+  - id: delete-to-products-list
+    endpoint: productsList
+    input_field: http_method
+    input_value: DELETE
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+  - id: post-to-brands-list
+    endpoint: brandsList
+    input_field: http_method
+    input_value: POST
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+  - id: put-to-brands-list
+    endpoint: brandsList
+    input_field: http_method
+    input_value: PUT
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+  - id: delete-to-brands-list
+    endpoint: brandsList
+    input_field: http_method
+    input_value: DELETE
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+  - id: get-to-search-product
+    endpoint: searchProduct
+    input_field: http_method
+    input_value: GET
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+  - id: delete-to-verify-login
+    endpoint: verifyLogin
+    input_field: http_method
+    input_value: DELETE
+    expected_status: 405
+    expected_behavior: This request method is not supported.
+
+# --- resources that do not exist -> 404 ---------------------------------
+unknown_resources:
+  - id: lookup-unknown-account
+    endpoint: getUserDetailByEmail
+    input_field: email
+    input_value: no-such-user@qavigil.invalid
+    expected_status: 404
+    expected_behavior: >-
+      The API reports the account is missing and returns no user payload.
+
+  - id: delete-unknown-account
+    endpoint: deleteAccount
+    input_field: email
+    input_value: no-such-user@qavigil.invalid
+    expected_status: 404
+    expected_behavior: The API refuses to delete an account that never existed.

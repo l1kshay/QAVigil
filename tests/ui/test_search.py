@@ -2,7 +2,9 @@
 
 Cart tests live here rather than in a file of their own because adding to the
 cart starts from the product listing; keeping the journey together keeps each
-test short. Phase 4 moves the search terms below into test_data/products.json.
+test short.
+
+All inputs come from test_data/products.json.
 """
 
 from __future__ import annotations
@@ -11,9 +13,17 @@ import pytest
 
 from pages.cart_page import CartPage
 from pages.search_page import SearchPage
+from test_data import loader as test_data
 
-SEARCH_TERM = "dress"
-SEARCH_TERM_WITH_NO_MATCHES = "zzqqxx-no-such-product"
+PRODUCTS = test_data.products()
+SEARCH_TERMS = PRODUCTS["search_terms"]
+CATALOGUE = PRODUCTS["catalogue_expectations"]
+CART = PRODUCTS["cart_expectations"]
+
+# Cases that should return results, and the one that should not - split so the
+# assertions can differ without a conditional inside a single test.
+MATCHING_TERMS = [t for t in SEARCH_TERMS if t["expected_result"] == "non_empty"]
+EMPTY_TERMS = [t for t in SEARCH_TERMS if t["expected_result"] == "empty"]
 
 
 @pytest.mark.smoke
@@ -22,21 +32,36 @@ def test_products_page_lists_the_catalogue(page) -> None:
     products = SearchPage(page)
     products.open()
 
-    assert products.result_count > 0, "expected the catalogue to list products"
+    assert products.result_count >= CATALOGUE["min_products"]
 
 
 @pytest.mark.smoke
-def test_search_returns_matching_products(page) -> None:
-    """A search returns a non-empty, narrower result set."""
+@pytest.mark.parametrize("case", MATCHING_TERMS, ids=test_data.case_ids(MATCHING_TERMS))
+def test_search_returns_matching_products(page, case) -> None:
+    """A search for a known term returns a non-empty, narrower result set."""
     products = SearchPage(page)
     products.open()
     catalogue_size = products.result_count
 
-    products.search_for(SEARCH_TERM)
+    products.search_for(case["term"])
 
-    assert 0 < products.result_count < catalogue_size, (
-        f"search for {SEARCH_TERM!r} returned {products.result_count} of "
+    assert case["min_results"] <= products.result_count < catalogue_size, (
+        f"search for {case['term']!r} returned {products.result_count} of "
         f"{catalogue_size} products; expected a non-empty subset"
+    )
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("case", EMPTY_TERMS, ids=test_data.case_ids(EMPTY_TERMS))
+def test_search_with_no_matches_returns_nothing(page, case) -> None:
+    """A nonsense term yields an empty result set, not the full catalogue."""
+    products = SearchPage(page)
+    products.open()
+
+    products.search_for(case["term"])
+
+    assert products.result_count == 0, (
+        f"expected no matches for {case['term']!r}, got {products.result_count}"
     )
 
 
@@ -44,16 +69,16 @@ def test_search_returns_matching_products(page) -> None:
 def test_search_finds_a_product_by_its_exact_name(page) -> None:
     """Searching a product's own name returns that product.
 
-    Note on what is *not* asserted here. An earlier version of this test
-    required every result name to contain the search term, and it failed
-    legitimately: this site matches on **category** as well as name, so
-    searching "dress" correctly returns Kids items such as "Sleeves Top and
-    Short - Blue & Pink" whose category is Dress. Asserting name-containment
-    would encode a false assumption about the feature. Category is not shown
-    on the listing grid, so category-level relevance is asserted in the API
-    suite, where the category field is actually available.
+    Note on what is *not* asserted here. An earlier version required every
+    result name to contain the search term, and it failed legitimately: this
+    site matches on **category** as well as name, so searching "dress"
+    correctly returns Kids items such as "Sleeves Top and Short - Blue & Pink"
+    whose category is Dress. Asserting name-containment would encode a false
+    assumption about the feature. Category is not shown on the listing grid, so
+    category-level relevance is asserted in the API suite, where the field
+    actually exists.
 
-    The term is taken from the live catalogue rather than hardcoded, so this
+    The term is taken from the live catalogue rather than a fixture, so this
     keeps working when the demo site's inventory changes.
     """
     products = SearchPage(page)
@@ -74,23 +99,9 @@ def test_search_switches_the_listing_heading(page) -> None:
     products = SearchPage(page)
     products.open()
 
-    products.search_for(SEARCH_TERM)
+    products.search_for(MATCHING_TERMS[0]["term"])
 
     assert "SEARCHED PRODUCTS" in products.heading.upper()
-
-
-@pytest.mark.regression
-def test_search_with_no_matches_returns_nothing(page) -> None:
-    """A nonsense term yields an empty result set rather than the full catalogue."""
-    products = SearchPage(page)
-    products.open()
-
-    products.search_for(SEARCH_TERM_WITH_NO_MATCHES)
-
-    assert products.result_count == 0, (
-        f"expected no matches for {SEARCH_TERM_WITH_NO_MATCHES!r}, "
-        f"got {products.result_count}"
-    )
 
 
 @pytest.mark.smoke
@@ -119,7 +130,7 @@ def test_cart_records_a_single_unit_for_one_add(page) -> None:
     products.view_cart()
 
     cart = CartPage(page)
-    assert cart.quantity_of(1) == 1
+    assert cart.quantity_of(CART["product_id"]) == CART["expected_quantity"]
 
 
 @pytest.mark.regression
@@ -131,7 +142,7 @@ def test_removing_the_last_item_empties_the_cart(page) -> None:
     products.view_cart()
     cart = CartPage(page)
 
-    cart.remove(1)
+    cart.remove(CART["product_id"])
 
     assert cart.is_empty, f"cart still holds {cart.item_count} item(s)"
 

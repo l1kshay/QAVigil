@@ -14,6 +14,9 @@ import pytest
 
 from api_clients.auth_client import AuthClient
 from api_clients.schemas import MESSAGE_SCHEMA, USER_DETAIL_SCHEMA
+from test_data import loader as test_data
+
+INVALID_CREDENTIALS = test_data.users()["api_invalid_credentials"]
 
 
 @pytest.mark.smoke
@@ -37,11 +40,15 @@ def test_verify_login_rejects_a_wrong_password(auth_client, registered_account) 
 
 
 @pytest.mark.regression
-def test_verify_login_rejects_an_unknown_account(auth_client) -> None:
-    """An address with no account behind it is refused."""
-    response = auth_client.verify_login("no-such-user@qavigil.invalid", "irrelevant")
+@pytest.mark.parametrize(
+    "case", INVALID_CREDENTIALS, ids=test_data.case_ids(INVALID_CREDENTIALS)
+)
+def test_verify_login_rejects_unknown_accounts(auth_client, case) -> None:
+    """A well-formed request for an account that does not exist is refused."""
+    response = auth_client.verify_login(case["email"], case["password"])
 
-    response.assert_status(404)
+    response.assert_status(case["expected_status"])
+    assert response.message == case["expected_message"], f"case {case['id']}"
 
 
 @pytest.mark.smoke

@@ -1,0 +1,20 @@
+# Order and payment fixtures for the checkout journey.
+#
+# The card below is 4111111111111111 - the industry-standard Visa *test*
+# number. It is not a real instrument, it cannot be charged, and the target is
+# a demo site that processes no payments at all. A real card must never appear
+# here or anywhere else in this repository.
+
+payment_card:
+  name_on_card: QA Vigil
+  card_number: "4111111111111111"
+  cvc: "311"
+  expiry_month: "12"
+  expiry_year: "2030"
+  expected_result: order_confirmed
+  expected_confirmation: "ORDER PLACED!"
+
+order:
+  comment: Placed by the QAVigil automated suite.
+  expected_item_count: 1
+  expected_result: order_confirmed

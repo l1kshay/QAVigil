@@ -27,10 +27,10 @@ from faker import Faker
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
 from api_clients.auth_client import AuthClient
-from api_clients.base_client import BaseClient
 from api_clients.product_client import ProductClient
 from config.settings import REPORTS_DIR, settings
 from pages.login_page import LoginPage
+from test_data import loader as test_data
 
 # Identifies our traffic to the target site rather than sending a bare
 # python-requests default, which some hosts reject outright.
@@ -127,25 +127,24 @@ def account_payload(faker_instance: Faker) -> dict[str, Any]:
     testing - while every other test just wants an account that already exists.
     """
     return {
+        # Faker supplies everything that must be unique or realistic...
         "name": faker_instance.name(),
         # example.com is reserved for documentation and cannot receive mail,
         # so no real inbox can ever be hit by these registrations.
         "email": f"qavigil.{uuid.uuid4().hex[:12]}@example.com",
         "password": faker_instance.password(length=12),
-        "title": "Mr",
-        "birth_date": "1",
-        "birth_month": "1",
-        "birth_year": "1990",
         "firstname": faker_instance.first_name(),
         "lastname": faker_instance.last_name(),
         "company": faker_instance.company(),
         "address1": faker_instance.street_address(),
         "address2": "",
-        "country": "India",
         "zipcode": faker_instance.postcode(),
         "state": faker_instance.city(),
         "city": faker_instance.city(),
         "mobile_number": faker_instance.numerify("##########"),
+        # ...and test_data supplies the fields the site validates against its
+        # own fixed lists, which Faker cannot invent valid values for.
+        **test_data.users()["account_defaults"],
     }
 
 

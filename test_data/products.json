@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "Catalogue and search fixtures for the UI and API product tests.",
+    "Every record carries an explicit expected_status / expected_result, per",
+    "ARCHITECTURE.md section 4.",
+    "matches_by records HOW the site is expected to match a term: this API",
+    "searches product category as well as name, so 'dress' legitimately",
+    "returns items whose names do not contain the word. That behaviour is",
+    "recorded here rather than rediscovered by a failing test."
+  ],
+
+  "search_terms": [
+    {
+      "id": "category-match",
+      "term": "dress",
+      "expected_status": 200,
+      "expected_result": "non_empty",
+      "min_results": 1,
+      "matches_by": "name_or_category"
+    },
+    {
+      "id": "name-match",
+      "term": "top",
+      "expected_status": 200,
+      "expected_result": "non_empty",
+      "min_results": 1,
+      "matches_by": "name_or_category"
+    },
+    {
+      "id": "no-match",
+      "term": "zzqqxx-no-such-product",
+      "expected_status": 200,
+      "expected_result": "empty",
+      "min_results": 0,
+      "matches_by": "none"
+    }
+  ],
+
+  "known_products": [
+    {
+      "id": "first-catalogue-product",
+      "product_id": 1,
+      "name": "Blue Top",
+      "expected_status": 200,
+      "expected_result": "present_in_catalogue"
+    }
+  ],
+
+  "catalogue_expectations": {
+    "min_products": 1,
+    "min_brands": 1,
+    "expected_status": 200,
+    "expected_result": "non_empty",
+    "product_ids_unique": true
+  },
+
+  "cart_expectations": {
+    "id": "single-add",
+    "product_id": 1,
+    "expected_quantity": 1,
+    "expected_result": "item_in_cart"
+  }
+}

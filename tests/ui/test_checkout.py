@@ -5,8 +5,7 @@ account, fills a cart and places an order - so there are few of them and each
 targets a distinct failure. The account comes from a fixture that cleans up
 after itself, so a failed run does not leave orders behind.
 
-The card values below are placeholders on a demo site that processes nothing;
-they move into test_data in Phase 4.
+Card and order inputs come from test_data/checkout.yaml.
 """
 
 from __future__ import annotations
@@ -16,13 +15,11 @@ import pytest
 from pages.cart_page import CartPage
 from pages.checkout_page import CheckoutPage
 from pages.search_page import SearchPage
+from test_data import loader as test_data
 
-CARD_NAME = "QA Vigil"
-CARD_NUMBER = "4111111111111111"
-CARD_CVC = "311"
-CARD_EXPIRY_MONTH = "12"
-CARD_EXPIRY_YEAR = "2030"
-ORDER_COMMENT = "Placed by the QAVigil automated suite."
+CHECKOUT_DATA = test_data.checkout()
+CARD = CHECKOUT_DATA["payment_card"]
+ORDER = CHECKOUT_DATA["order"]
 
 
 def _fill_cart_and_check_out(page) -> CheckoutPage:
@@ -41,6 +38,17 @@ def _fill_cart_and_check_out(page) -> CheckoutPage:
     checkout = CheckoutPage(page)
     checkout.wait_for_url("/checkout")
     return checkout
+
+
+def _pay(checkout: CheckoutPage):
+    """Complete payment with the card from test data."""
+    return checkout.place_order().pay_with(
+        name_on_card=CARD["name_on_card"],
+        card_number=CARD["card_number"],
+        cvc=CARD["cvc"],
+        expiry_month=CARD["expiry_month"],
+        expiry_year=CARD["expiry_year"],
+    )
 
 
 @pytest.mark.smoke
@@ -69,8 +77,9 @@ def test_checkout_reviews_the_cart_contents(logged_in_page) -> None:
     """The order review lists the single product that was added."""
     checkout = _fill_cart_and_check_out(logged_in_page)
 
-    assert checkout.review_item_count == 1, (
-        f"expected 1 item in the order review, found {checkout.review_item_count}"
+    assert checkout.review_item_count == ORDER["expected_item_count"], (
+        f"expected {ORDER['expected_item_count']} item(s) in the order review, "
+        f"found {checkout.review_item_count}"
     )
 
 
@@ -78,15 +87,9 @@ def test_checkout_reviews_the_cart_contents(logged_in_page) -> None:
 def test_placing_an_order_confirms_it(logged_in_page) -> None:
     """The full journey ends in a confirmed order."""
     checkout = _fill_cart_and_check_out(logged_in_page)
-    checkout.add_order_comment(ORDER_COMMENT)
+    checkout.add_order_comment(ORDER["comment"])
 
-    payment = checkout.place_order().pay_with(
-        name_on_card=CARD_NAME,
-        card_number=CARD_NUMBER,
-        cvc=CARD_CVC,
-        expiry_month=CARD_EXPIRY_MONTH,
-        expiry_year=CARD_EXPIRY_YEAR,
-    )
+    payment = _pay(checkout)
 
     assert payment.is_order_confirmed, (
         f"expected an order confirmation, page said: {payment.confirmation_message!r}"
@@ -98,12 +101,6 @@ def test_confirmed_order_offers_an_invoice(logged_in_page) -> None:
     """A completed order exposes its invoice for download."""
     checkout = _fill_cart_and_check_out(logged_in_page)
 
-    payment = checkout.place_order().pay_with(
-        name_on_card=CARD_NAME,
-        card_number=CARD_NUMBER,
-        cvc=CARD_CVC,
-        expiry_month=CARD_EXPIRY_MONTH,
-        expiry_year=CARD_EXPIRY_YEAR,
-    )
+    payment = _pay(checkout)
 
     assert payment.has_invoice_link
