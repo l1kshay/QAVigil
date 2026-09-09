@@ -149,6 +149,7 @@ activemq-data/
 
 # Environments
 .env
+.env.local
 .envrc
 .venv
 env/
@@ -166,6 +167,14 @@ venv.bak/
 
 # mkdocs documentation
 /site
+
+# --- QAVigil ---------------------------------------------------------------
+# Generated test output. The reports/ directory itself is tracked (via its
+# .gitkeep) so a fresh clone has somewhere to write; its contents are not.
+reports/*
+!reports/.gitkeep
+allure-results/
+allure-report/
 
 # mypy
 .mypy_cache/

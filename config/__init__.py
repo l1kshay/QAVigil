@@ -1,0 +1,1 @@
+"""QAVigil configuration."""

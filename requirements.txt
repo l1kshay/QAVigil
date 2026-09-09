@@ -1,0 +1,24 @@
+# QAVigil - test automation dependencies
+# Pinned for reproducible local and CI runs. Python 3.11+ (developed on 3.12).
+
+# --- UI automation ---
+playwright==1.62.0
+
+# --- API testing ---
+requests==2.34.2
+
+# --- test framework ---
+pytest==9.1.1
+pytest-xdist==3.8.0
+
+# --- reporting (Allure preferred, pytest-html as fallback) ---
+allure-pytest==2.16.0
+pytest-html==4.2.0
+
+# --- test data ---
+PyYAML==6.0.3
+Faker==40.38.0
+
+# --- validation and config ---
+jsonschema==4.26.0
+python-dotenv==1.2.3
