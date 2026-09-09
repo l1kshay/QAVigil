@@ -1,0 +1,62 @@
+[
+  {
+    "name": "run_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Unique identifier for one CI run. The GitHub Actions run id when available, otherwise a locally generated uuid."
+  },
+  {
+    "name": "test_name",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Full pytest node id, e.g. tests.ui.test_login#test_logout_ends_the_session."
+  },
+  {
+    "name": "suite",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "ui, api, or environment."
+  },
+  {
+    "name": "status",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "passed, failed, flaky, or skipped. flaky means the test failed and then passed on a retry within the same run."
+  },
+  {
+    "name": "duration_seconds",
+    "type": "FLOAT",
+    "mode": "REQUIRED",
+    "description": "Wall-clock execution time. For a flaky test this is the total across all attempts."
+  },
+  {
+    "name": "run_timestamp",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "When the test started, UTC. Partitioning column."
+  },
+  {
+    "name": "branch",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Git branch that triggered the run."
+  },
+  {
+    "name": "commit_sha",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Commit under test. Beyond the fields listed in ARCHITECTURE.md section 4, because the first question a broken trend line raises is which change broke it, and a branch name cannot answer that."
+  },
+  {
+    "name": "retry_count",
+    "type": "INTEGER",
+    "mode": "NULLABLE",
+    "description": "Attempts beyond the first. Also beyond section 4's list: flaky-test frequency is far more actionable when a test that needed one retry is distinguishable from one that needed three."
+  },
+  {
+    "name": "marker",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "pytest marker the test carried (smoke or regression), so trends can be split by suite tier."
+  }
+]

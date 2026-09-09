@@ -366,6 +366,34 @@ The plan says "Python 3.11+". Three interpreters were available locally (3.11, 3
 
 **Decision:** 3.12. It is in-spec, every pinned dependency has stable wheels for it, and it is a first-class GitHub Actions runner version, so local and CI agree. 3.14 was avoided as too new for the dependency set.
 
-### 10.12 Manual steps CI cannot perform
+### 10.12 Phase 7 keeps its dependencies out of the core suite
+
+`google-cloud-bigquery`, `streamlit`, `pandas` and `altair` live in `analytics/requirements.txt`, never the project's `requirements.txt`, and `google.cloud.bigquery` is imported lazily in both analytics modules. Someone cloning this repo to run tests must not have to install a cloud SDK, and the CI test job must not slow down for one. The CI export step installs only the BigQuery client, not the dashboard's dependencies.
+
+### 10.13 Retries are collapsed before export, and flaky counts as a pass
+
+Allure writes one result file per attempt, and `pytest-rerunfailures` produces several for a flaky test. Exported raw, **one flaky test would appear as both a failure and a pass**, quietly corrupting every pass-rate figure the dashboards show. `collapse_retries()` groups attempts by their shared `historyId`: if any attempt failed and the final one passed, the row is recorded as `flaky`, with duration summed across attempts.
+
+The dashboard then counts `flaky` as a **pass** in the pass-rate line — it did pass — and gives flakiness its own chart. Folding flakes into the failure line would make the headline metric swing on infrastructure noise, which is how a dashboard teaches people to ignore it.
+
+### 10.14 `--clean-alluredir` is mandatory, not tidiness
+
+Found while testing the exporter: results accumulate across local runs, and because retries are correlated by `historyId`, the *same test from two different runs* looked like one flaky test with a retry. The exporter reported phantom retries on passing tests. CI gets a fresh checkout so it would not have been bitten, but relying on that is fragile — `--clean-alluredir` in `pytest.ini` makes local runs behave like CI.
+
+### 10.15 The analytics export never fails the build
+
+A BigQuery outage must not turn a green test run red. The tests' verdict is what matters; a build that fails over telemetry teaches people to ignore CI. On upload failure the exporter writes its rows to JSONL so the run's history can be loaded later, warns, and exits zero.
+
+### 10.16 Two BigQuery credentials, never one
+
+The export step's credential is write-scoped (`bigquery.dataEditor` on the single dataset) and lives in CI secrets; the dashboard's is read-only (`bigquery.dataViewer`) and lives in a deployed web app. Neither should be able to do the other's job. This is section 6's rule, made concrete in `analytics/README.md`.
+
+### 10.17 Dashboard chart choices
+
+Colours are drawn from a validated palette and checked with a colour-vision-deficiency and contrast validator in both light and dark modes (worst adjacent CVD ΔE 24.7 light / 26.8 dark, all six checks passing). Status meaning always carries a text label, never hue alone; a table view backs every chart. The pass-rate axis is deliberately not zero-based — a suite living between 95% and 100% shows nothing useful on a 0–100 axis — and headline figures are stat tiles rather than charts, because a single value is not a chart.
+
+### 10.18 Manual steps CI cannot perform
 
 Publishing to GitHub Pages requires **Settings → Pages → Source: GitHub Actions** to be enabled by a repository admin. The workflow is written and ready; the setting is deliberately not automated, since repository settings are out of scope for this project's tooling.
+
+Phase 7 adds more of these, all requiring accounts and web UIs: creating the GCP project/dataset/table, creating the two service accounts, adding the four repository secrets, building the Looker Studio report, and deploying the Streamlit app. The full checklist is at the end of `analytics/README.md`. Everything on the code side is built and verified against a local JSONL export, so the pipeline can be demonstrated end-to-end before any cloud account exists.

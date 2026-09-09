@@ -1,0 +1,16 @@
+# Phase 7 (analytics/BI) dependencies ONLY.
+#
+# Deliberately separate from the project's requirements.txt. The core test
+# suite must never need a cloud SDK to run - a contributor cloning this repo to
+# run tests should not have to install BigQuery client libraries, and CI's test
+# job should not slow down for them.
+#
+#   pip install -r analytics/requirements.txt
+
+# --- export step (write-scoped credential) ---
+google-cloud-bigquery==3.45.0
+
+# --- dashboard app (separate, read-only credential) ---
+streamlit==1.63.0
+pandas==3.0.5
+altair==6.2.2

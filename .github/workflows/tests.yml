@@ -41,6 +41,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # Declared at job level, not on the step: the `secrets` context is not
+    # available in a step's `if`, and a step cannot read its own `env` there
+    # either. Job-level env can be read by a step's `if`, which is what lets
+    # the analytics export skip itself cleanly when BigQuery is not configured.
+    env:
+      BQ_PROJECT: ${{ secrets.BQ_PROJECT }}
+      BQ_DATASET: ${{ secrets.BQ_DATASET }}
+      BQ_TABLE: ${{ secrets.BQ_TABLE }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -112,6 +121,26 @@ jobs:
         run: |
           npm install -g allure-commandline --silent
           allure generate reports/allure-results --clean -o reports/allure-report
+
+      # --- Phase 7: test-run analytics -------------------------------------
+      # Skipped entirely unless BQ_PROJECT is configured, so forks and any repo
+      # that has not set up BigQuery are unaffected. Only the BigQuery client is
+      # installed here, not the dashboard's dependencies.
+      - name: Export results to BigQuery
+        if: always() && env.BQ_PROJECT != ''
+        env:
+          BQ_CREDENTIALS_JSON: ${{ secrets.BQ_CREDENTIALS_JSON }}
+        run: |
+          pip install "google-cloud-bigquery==3.45.0"
+          # The key never touches the repository or the logs; it lives only in
+          # the runner's temp dir for the life of this step.
+          printf '%s' "$BQ_CREDENTIALS_JSON" > "${RUNNER_TEMP}/bq-key.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="${RUNNER_TEMP}/bq-key.json"
+          # The exporter never fails the build: the tests' verdict is what
+          # matters, and a red build caused by a telemetry outage teaches
+          # people to ignore CI.
+          python analytics/export_to_bigquery.py
+          rm -f "${RUNNER_TEMP}/bq-key.json"
 
       - name: Upload report artifacts
         if: always()

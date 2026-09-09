@@ -195,6 +195,33 @@ conftest.py     Shared fixtures.
 - Every test-data record carries an explicit `expected_result` /
   `expected_status`.
 
+---
+
+## Test-run analytics (optional)
+
+`analytics/` adds a history layer on top of the suite: pass-rate trend,
+flaky-test frequency, and suite duration over time, exported to BigQuery and
+visualized in Looker Studio and a Streamlit app.
+
+It is entirely optional and entirely separate — nothing in `tests/`, `pages/`
+or `api_clients/` imports it, and its dependencies live in
+`analytics/requirements.txt` so running the test suite never requires a cloud
+SDK.
+
+It also works with no cloud account at all:
+
+```bash
+pytest
+python analytics/export_to_bigquery.py --dry-run   # -> reports/test_runs.jsonl
+pip install -r analytics/requirements.txt
+streamlit run analytics/dashboard_app.py
+```
+
+Setup, schema, and the list of steps that need a human are in
+[`analytics/README.md`](analytics/README.md).
+
+---
+
 ### One thing to know before reading the code
 
 **This API answers every request with HTTP 200** and reports the real status in
