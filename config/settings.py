@@ -99,8 +99,9 @@ class Settings:
 
 settings = Settings.load()
 
-# Where UI failure artifacts land. Phase 5 wires these into the Allure report.
+# Where UI failure artifacts land, and where Allure collects its raw results.
 REPORTS_DIR = PROJECT_ROOT / "reports"
 SCREENSHOTS_DIR = REPORTS_DIR / "screenshots"
 TRACES_DIR = REPORTS_DIR / "traces"
+ALLURE_RESULTS_DIR = REPORTS_DIR / "allure-results"
 TEST_DATA_DIR = PROJECT_ROOT / "test_data"

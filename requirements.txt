@@ -10,6 +10,10 @@ requests==2.34.2
 # --- test framework ---
 pytest==9.1.1
 pytest-xdist==3.8.0
+# Reruns a failing test to tell a genuine regression from a flaky one: a test
+# that fails then passes is, by definition, flaky. The suite's goal of
+# separating real failures from flakes needs this.
+pytest-rerunfailures==16.6.1
 
 # --- reporting (Allure preferred, pytest-html as fallback) ---
 allure-pytest==2.16.0
