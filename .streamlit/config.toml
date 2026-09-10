@@ -1,0 +1,22 @@
+# Base theme for native Streamlit widgets (radio, multiselect, dataframe,
+# buttons). These are the light-theme tokens from the instrument-panel palette.
+#
+# Why only light here: Streamlit's [theme] block sets ONE base, and the app's
+# own sidebar control is the single source of truth for which theme is showing.
+# Dark is applied by the CSS in inject_custom_css(), which also restyles the
+# app chrome so the whole surface follows that one control rather than leaving
+# native widgets on a light base while the page goes dark.
+[theme]
+base = "light"
+backgroundColor = "#F6F7F5"
+secondaryBackgroundColor = "#EDEFEC"
+textColor = "#1B2430"
+primaryColor = "#3A5A78"
+borderColor = "#D8DCD9"
+font = "sans-serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

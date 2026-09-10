@@ -19,6 +19,7 @@ write-scoped one the export step uses. See ARCHITECTURE.md section 6.
 
 from __future__ import annotations
 
+import html
 import json
 import os
 from pathlib import Path
@@ -31,40 +32,390 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_JSONL = PROJECT_ROOT / "reports" / "test_runs.jsonl"
 
 # --- design tokens ----------------------------------------------------------
-# Validated with the data-viz palette validator: all six checks pass in both
-# light and dark modes (worst adjacent CVD dE 24.7 light / 26.8 dark).
-# Status colours are reserved and always ship with a text label, never colour
-# alone, so meaning never depends on hue.
-PALETTE = {
+# "Instrument panel for a test suite": calm and exact. Colour is functional -
+# it encodes pass / flaky / fail state and nothing else. There is no
+# decorative colour anywhere, and no boxed cards; sections are separated by
+# hairline rules.
+
+SANS = "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif"
+MONO = "'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace"
+
+#: Same faces, unquoted - Vega takes a plain comma-separated family list.
+SANS_STACK = "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif"
+MONO_STACK = "IBM Plex Mono, ui-monospace, Consolas, monospace"
+
+#: Status colours are identical in both themes on purpose - a failure is the
+#: same red whatever the surface. Contrast was measured rather than eyeballed,
+#: which constrains where they may be used: as chart marks, as state rules,
+#: and as large figures (>=24px), but never as small body text, where
+#: #C97A2B reaches only 3.10:1 on the light background. Alerts therefore tint
+#: the background and take a coloured rule, keeping their body copy in --text
+#: at 12.5:1 or better.
+STATUS = {
+    "pass": "#1F7A5C",
+    "flaky": "#C97A2B",
+    "fail": "#B23A2E",
+}
+
+THEMES = {
     "light": {
-        "surface": "#fcfcfb",
-        "text_primary": "#0b0b0b",
-        "text_secondary": "#52514e",
-        "muted": "#898781",
-        "grid": "#e1e0d9",
-        "axis": "#c3c2b7",
-        "series_1": "#2a78d6",   # blue - ui
-        "series_2": "#eb6834",   # orange - api
-        "good": "#0ca30c",
-        "warning": "#fab219",
-        "critical": "#d03b3b",
+        "bg": "#F6F7F5",
+        "text": "#1B2430",
+        # Derived, not given: the brief's four tokens have no secondary ink,
+        # and axis labels need one that still clears 4.5:1 (measured 5.61:1).
+        "muted": "#5A646E",
+        "accent": "#3A5A78",
+        "border": "#D8DCD9",
+        "tint": 0.10,
     },
     "dark": {
-        "surface": "#1a1a19",
-        "text_primary": "#ffffff",
-        "text_secondary": "#c3c2b7",
-        "muted": "#898781",
-        "grid": "#2c2c2a",
-        "axis": "#383835",
-        "series_1": "#3987e5",
-        "series_2": "#d95926",
-        "good": "#0ca30c",
-        "warning": "#fab219",
-        "critical": "#d03b3b",
+        "bg": "#12161C",
+        "text": "#E4E7EA",
+        "muted": "#9AA4AE",   # 7.17:1 on the dark background
+        "accent": "#7DA0BE",
+        "border": "#2A313A",
+        "tint": 0.10,
     },
 }
 
+
+def _tint(hex_colour: str, background: str, alpha: float) -> str:
+    """Flatten a translucent status colour onto the page background.
+
+    Used for alert fills. Computing the blend here rather than relying on
+    rgba() keeps the resulting colour knowable, which is what let the contrast
+    of body text over each tint be measured up front.
+    """
+    fg = hex_colour.lstrip("#")
+    bg = background.lstrip("#")
+    channels = [
+        round(int(fg[i:i + 2], 16) * alpha + int(bg[i:i + 2], 16) * (1 - alpha))
+        for i in (0, 2, 4)
+    ]
+    return "#%02X%02X%02X" % tuple(channels)
+
+
 STATUS_ORDER = ["passed", "flaky", "failed", "skipped"]
+
+
+# ---------------------------------------------------------------------------
+# presentation
+# ---------------------------------------------------------------------------
+def inject_custom_css(theme: str) -> None:
+    """Apply the instrument-panel styling. Called once, near the top of main().
+
+    Every selector below is a ``data-testid`` verified against the installed
+    Streamlit (1.63.0) by inspecting the rendered DOM, not recalled - the
+    emotion class names beside them (``st-emotion-cache-*``) are generated and
+    churn between releases, so they are never used.
+
+    Theming is driven by the ``theme`` argument rather than a CSS attribute
+    selector. Streamlit 1.63 emits no ``data-theme`` on ``<html>``, ``<body>``
+    or ``stApp`` - verified - and ``st.context.theme.type`` is documented as
+    unreliable on first load and during a theme change. One explicit control,
+    read in Python, is the only mechanism here that is actually deterministic.
+    """
+    t = THEMES[theme]
+    tints = {k: _tint(c, t["bg"], t["tint"]) for k, c in STATUS.items()}
+
+    st.markdown(
+        f"""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+        :root {{
+            --bg: {t["bg"]};
+            --text: {t["text"]};
+            --muted: {t["muted"]};
+            --accent: {t["accent"]};
+            --border: {t["border"]};
+            --status-pass: {STATUS["pass"]};
+            --status-flaky: {STATUS["flaky"]};
+            --status-fail: {STATUS["fail"]};
+            --tint-pass: {tints["pass"]};
+            --tint-flaky: {tints["flaky"]};
+            --tint-fail: {tints["fail"]};
+        }}
+
+        /* --- surfaces ---------------------------------------------------
+           The app chrome is restyled too, so the whole surface follows the
+           one theme control instead of leaving native widgets on the light
+           base that config.toml sets. */
+        [data-testid="stApp"],
+        [data-testid="stMain"],
+        [data-testid="stHeader"] {{
+            background: var(--bg);
+            color: var(--text);
+        }}
+        [data-testid="stSidebar"],
+        [data-testid="stSidebarContent"] {{
+            background: var(--bg);
+            border-right: 1px solid var(--border);
+        }}
+
+        /* --- type -------------------------------------------------------
+           Sans is the default; mono is applied deliberately below, only to
+           numbers and identifiers. */
+        [data-testid="stApp"], [data-testid="stApp"] p,
+        [data-testid="stApp"] label, [data-testid="stApp"] button,
+        [data-testid="stHeading"], [data-testid="stWidgetLabel"] {{
+            font-family: {SANS};
+            color: var(--text);
+        }}
+        /* The family has to be restated on the heading elements themselves.
+           Setting it on the stHeading container is not enough: Streamlit
+           styles h1/h2/h3 directly, and that rule wins on the child. */
+        [data-testid="stHeading"] h1,
+        [data-testid="stHeading"] h2,
+        [data-testid="stHeading"] h3,
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {{
+            font-family: {SANS};
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--text);
+        }}
+        [data-testid="stHeading"] h3 {{ font-size: 1.02rem; }}
+        [data-testid="stCaptionContainer"] {{ color: var(--muted); }}
+
+        /* Mono for raw values: inline code, dataframe cells, and anything
+           explicitly marked as a figure or identifier. */
+        [data-testid="stApp"] code,
+        [data-testid="stDataFrame"] [role="gridcell"],
+        .qv-mono {{
+            font-family: {MONO};
+            font-variant-ligatures: none;
+        }}
+        [data-testid="stApp"] code {{
+            background: transparent;
+            color: var(--text);
+            font-size: 0.86em;
+            padding: 0;
+        }}
+
+        /* --- top status strip ------------------------------------------- */
+        .qv-strip {{
+            display: flex;
+            align-items: baseline;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            padding: 0 0 0.55rem 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.1rem;
+        }}
+        .qv-strip .qv-name {{
+            font-family: {SANS};
+            font-weight: 600;
+            font-size: 0.95rem;
+            color: var(--accent);
+            letter-spacing: 0.01em;
+        }}
+        .qv-strip .qv-field {{
+            font-family: {SANS};
+            font-size: 0.78rem;
+            color: var(--muted);
+        }}
+        .qv-strip .qv-val {{
+            font-family: {MONO};
+            font-size: 0.78rem;
+            color: var(--text);
+        }}
+        .qv-strip .qv-spacer {{ margin-left: auto; }}
+
+        /* --- instrument strip -------------------------------------------
+           No boxes, no shadows, no radius, no fill. Readings are separated
+           by a hairline rule, the way gauges share a bezel. */
+        .qv-instruments {{
+            display: flex;
+            align-items: stretch;
+            width: 100%;
+            border-bottom: 1px solid var(--border);
+            margin: 0 0 1.4rem 0;
+        }}
+        .qv-inst {{
+            flex: 1 1 0;
+            padding: 0.15rem 1.3rem 1.05rem 0;
+            border-right: 1px solid var(--border);
+        }}
+        .qv-inst:first-child {{ padding-left: 0; }}
+        .qv-inst:last-child {{ border-right: none; }}
+        .qv-inst .qv-read {{
+            font-family: {MONO};
+            font-size: 2.25rem;      /* >=24px: status colours clear 3:1 here */
+            font-weight: 500;
+            line-height: 1.15;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }}
+        .qv-inst .qv-read.is-pass {{ color: var(--status-pass); }}
+        .qv-inst .qv-read.is-flaky {{ color: var(--status-flaky); }}
+        .qv-inst .qv-read.is-fail {{ color: var(--status-fail); }}
+        .qv-inst .qv-label {{
+            font-family: {SANS};
+            font-size: 0.78rem;
+            font-weight: 400;
+            color: var(--muted);
+            margin-top: 0.22rem;
+        }}
+        .qv-inst .qv-delta {{
+            font-family: {MONO};
+            font-size: 0.74rem;
+            color: var(--muted);
+            margin-top: 0.1rem;
+        }}
+
+        /* --- section rule ------------------------------------------------ */
+        .qv-rule {{
+            border: 0;
+            border-top: 1px solid var(--border);
+            margin: 1.6rem 0 1.1rem 0;
+        }}
+
+        /* --- alerts ------------------------------------------------------
+           Streamlit paints the fill on stAlertContainer, and signals the kind
+           via a child testid (stAlertContentError etc) - both verified in the
+           DOM. Body copy stays in --text over a 10% tint, measured at 12.5:1
+           or better; the status colour carries meaning as the left rule.
+           st.info is deliberately NOT given a status colour: an unconfigured
+           dashboard is not a failing one. */
+        [data-testid="stAlertContainer"] {{
+            border-radius: 0;
+            box-shadow: none;
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--muted);
+            background: var(--bg);
+            color: var(--text);
+            font-family: {SANS};
+        }}
+        [data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {{
+            background: var(--tint-pass);
+            border-left-color: var(--status-pass);
+        }}
+        [data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {{
+            background: var(--tint-flaky);
+            border-left-color: var(--status-flaky);
+        }}
+        [data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {{
+            background: var(--tint-fail);
+            border-left-color: var(--status-fail);
+        }}
+        [data-testid="stAlertContainer"] p,
+        [data-testid="stAlertContainer"] code {{ color: var(--text); }}
+
+        /* --- charts ------------------------------------------------------
+           Vega renders into stVegaLiteChart; a transparent chart background
+           is set in the Altair config so the plot sits on the page rather
+           than on a pasted-in white rectangle. */
+        [data-testid="stVegaLiteChart"],
+        [data-testid="stVegaLiteChart"] canvas,
+        [data-testid="stVegaLiteChart"] svg {{
+            background: transparent !important;
+        }}
+
+        /* --- sidebar diagnostics: a debug readout, not decoration -------- */
+        [data-testid="stSidebar"] [data-testid="stExpander"] details {{
+            border: 1px solid var(--border);
+            border-radius: 0;
+            background: var(--bg);
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary {{
+            font-family: {SANS};
+            font-size: 0.82rem;
+            font-weight: 500;
+            color: var(--text);
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] p {{
+            font-family: {MONO};
+            font-size: 0.74rem;
+            line-height: 1.55;
+            color: var(--text);
+            margin-bottom: 0.28rem;
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] strong {{
+            font-family: {SANS};
+            font-weight: 600;
+            color: var(--muted);
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] code {{
+            font-family: {MONO};
+            color: var(--text);
+        }}
+        [data-testid="stSidebar"] [data-testid="stMarkdown"] p {{
+            font-size: 0.82rem;
+        }}
+
+        /* --- focus -------------------------------------------------------
+           Restated, not removed: nothing above clears an outline, and making
+           the ring explicit in the accent colour keeps it visible against
+           both surfaces. */
+        [data-testid="stApp"] :focus-visible {{
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }}
+
+        /* Streamlit's default deploy button and toolbar clutter the top
+           strip; the header itself stays for the settings menu. */
+        [data-testid="stAppDeployButton"] {{ display: none; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _esc(value: object) -> str:
+    """Escape a value for the small HTML fragments rendered below."""
+    return html.escape(str(value), quote=True)
+
+
+def render_status_strip(last_run: object | None, source: str) -> None:
+    """A thin top line: what this is, what it watches, when it last ran."""
+    stamp = (
+        last_run.strftime("%Y-%m-%d %H:%M UTC")
+        if last_run is not None and pd.notna(last_run)
+        else "no runs recorded"
+    )
+    st.markdown(
+        f"""
+        <div class="qv-strip">
+          <span class="qv-name">QAVigil</span>
+          <span class="qv-field">target <span class="qv-val">automationexercise.com</span></span>
+          <span class="qv-field qv-spacer">last run <span class="qv-val">{_esc(stamp)}</span></span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_instrument_strip(readings: list[dict]) -> None:
+    """The headline figures, as gauges sharing a bezel rather than as cards.
+
+    Each reading is ``{value, label, state?, delta?}``. ``state`` maps to a
+    status colour and is set only where the number genuinely reports pass or
+    flaky state - the test count and the duration are neutral, because
+    neither is a verdict.
+    """
+    cells = []
+    for r in readings:
+        state = f" is-{r['state']}" if r.get("state") else ""
+        delta = (
+            f'<div class="qv-delta">{_esc(r["delta"])}</div>' if r.get("delta") else ""
+        )
+        cells.append(
+            f'<div class="qv-inst">'
+            f'<div class="qv-read{state}">{_esc(r["value"])}</div>'
+            f'<div class="qv-label">{_esc(r["label"])}</div>'
+            f"{delta}</div>"
+        )
+    st.markdown(
+        f'<div class="qv-instruments">{"".join(cells)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def section_rule() -> None:
+    """A hairline divider between sections, in place of a card edge."""
+    st.markdown('<hr class="qv-rule">', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -411,24 +762,38 @@ def duration_by_suite(frame: pd.DataFrame) -> pd.DataFrame:
 # charts
 # ---------------------------------------------------------------------------
 def _base(colors: dict[str, str]) -> dict:
-    """Shared Altair config: recessive grid and axes, ink in text tokens."""
+    """Shared Vega config, matched to the page rather than to Vega's defaults.
+
+    Three things make a chart stop looking pasted in: a transparent background
+    so it sits on the page, axis type that matches the surrounding UI, and a
+    recessive grid. Tick labels are dates and numbers, so they take the mono
+    face; axis and legend *titles* are words, so they stay in sans.
+    """
     return {
-        "background": colors["surface"],
+        "background": "transparent",
         "axis": {
-            "domainColor": colors["axis"],
-            "gridColor": colors["grid"],
+            "domainColor": colors["accent"],
+            "domainWidth": 1,
+            "gridColor": colors["border"],
             "gridWidth": 1,
+            "tickColor": colors["accent"],
             "labelColor": colors["muted"],
-            "tickColor": colors["axis"],
-            "titleColor": colors["text_secondary"],
+            "labelFont": MONO_STACK,
             "labelFontSize": 11,
-            "titleFontSize": 12,
+            "titleColor": colors["muted"],
+            "titleFont": SANS_STACK,
+            "titleFontSize": 11,
             "titleFontWeight": "normal",
+            "titlePadding": 8,
         },
         "legend": {
-            "labelColor": colors["text_secondary"],
-            "titleColor": colors["text_secondary"],
+            "labelColor": colors["text"],
+            "labelFont": SANS_STACK,
+            "titleColor": colors["muted"],
+            "titleFont": SANS_STACK,
             "labelFontSize": 12,
+            "titleFontSize": 11,
+            "titleFontWeight": "normal",
         },
         "view": {"stroke": "transparent"},
     }
@@ -442,9 +807,13 @@ def pass_rate_chart(summary: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
 
     line = (
         alt.Chart(summary)
-        .mark_line(color=colors["series_1"], strokeWidth=2, point=False)
+        .mark_line(color=STATUS["pass"], strokeWidth=2, point=False)
         .encode(
-            x=alt.X("run_timestamp:T", title="Run"),
+            x=alt.X(
+                "run_timestamp:T",
+                title="Run",
+                axis=alt.Axis(format="%b %d", labelAngle=0, tickCount="day"),
+            ),
             # Not zero-based on purpose: a suite that lives between 95 and 100%
             # shows nothing useful on a 0-100 axis. The axis is labelled, and a
             # line chart of a rate is not a magnitude comparison.
@@ -459,8 +828,8 @@ def pass_rate_chart(summary: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
     points = (
         alt.Chart(summary)
         .mark_point(
-            color=colors["series_1"], size=80, filled=True,
-            stroke=colors["surface"], strokeWidth=2,
+            color=STATUS["pass"], size=80, filled=True,
+            stroke=colors["bg"], strokeWidth=2,
         )
         .encode(
             x="run_timestamp:T",
@@ -485,21 +854,31 @@ def flaky_chart(board: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
     """Flaky frequency. Horizontal bars: long test names need horizontal room."""
     return (
         alt.Chart(board)
-        .mark_bar(
-            color=colors["warning"],
-            cornerRadiusTopRight=4, cornerRadiusBottomRight=4,
-            height=18,
-        )
+        .mark_bar(color=STATUS["flaky"], height=14)
         .encode(
-            x=alt.X("occurrences:Q", title="Runs in which it flaked"),
-            y=alt.Y("short_name:N", title=None, sort="-x"),
+            # Integer run counts, so integer ticks - 3.5 runs is not a thing.
+            x=alt.X(
+                "occurrences:Q",
+                title="Runs in which it flaked",
+                axis=alt.Axis(tickMinStep=1, format="d"),
+            ),
+            y=alt.Y(
+                "short_name:N",
+                title=None,
+                sort="-x",
+                axis=alt.Axis(labelLimit=260, labelPadding=8),
+            ),
             tooltip=[
                 alt.Tooltip("test_name:N", title="Test"),
                 alt.Tooltip("occurrences:Q", title="Runs flaked"),
                 alt.Tooltip("retries:Q", title="Total retries"),
             ],
         )
-        .properties(height=max(len(board) * 28, 80))
+        # Step, not a total height: `height=N` divides N across however many
+        # bars there are, so a short leaderboard squeezed its bands to ~20px
+        # and Vega drew the test names on top of each other. Step fixes the
+        # height *per band*, so rows stay legible at any row count.
+        .properties(height=alt.Step(40))
         .configure(**_base(colors))
     )
 
@@ -510,14 +889,18 @@ def duration_chart(durations: pd.DataFrame, colors: dict[str, str]) -> alt.Chart
         alt.Chart(durations)
         .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=45, filled=True))
         .encode(
-            x=alt.X("run_timestamp:T", title="Run"),
+            x=alt.X(
+                "run_timestamp:T",
+                title="Run",
+                axis=alt.Axis(format="%b %d", labelAngle=0, tickCount="day"),
+            ),
             y=alt.Y("duration_seconds:Q", title="Duration (seconds)"),
             color=alt.Color(
                 "suite:N",
                 title="Suite",
                 scale=alt.Scale(
                     domain=["ui", "api", "environment"],
-                    range=[colors["series_1"], colors["series_2"], colors["muted"]],
+                    range=[colors["accent"], colors["muted"], colors["border"]],
                 ),
             ),
             tooltip=[
@@ -537,18 +920,29 @@ def duration_chart(durations: pd.DataFrame, colors: dict[str, str]) -> alt.Chart
 def main() -> None:
     st.set_page_config(page_title="QAVigil - suite health", layout="wide")
 
+    # The theme control is read before anything renders, because the CSS it
+    # selects has to be in the document before the first painted element.
+    with st.sidebar:
+        st.header("View")
+        theme = st.radio("Theme", ["light", "dark"], horizontal=True)
+    colors = THEMES[theme]
+    inject_custom_css(theme)
+
+    raw, source, diag = load_data()
+
+    # The strip needs the newest run, which is only known once data is loaded.
+    last_run = None
+    if not raw.empty and "run_timestamp" in raw:
+        last_run = pd.to_datetime(
+            raw["run_timestamp"], utc=True, format="mixed", errors="coerce"
+        ).max()
+    render_status_strip(last_run, source)
+
     st.title("QAVigil suite health")
     st.caption(
         "Pass rate, flakiness and duration across test runs of "
         "automationexercise.com."
     )
-
-    with st.sidebar:
-        st.header("View")
-        theme = st.radio("Theme", ["light", "dark"], horizontal=True)
-    colors = PALETTE[theme]
-
-    raw, source, diag = load_data()
 
     # Rendered before the early return below. The previous version computed
     # `source` and then returned without ever showing it, so the one case that
@@ -598,29 +992,44 @@ def main() -> None:
     previous = summary.iloc[-2] if len(summary) > 1 else None
 
     # Headline numbers first. These are single values, and a single value is a
-    # stat tile, not a chart.
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric(
-        "Pass rate (latest run)",
-        f"{latest['pass_rate']:.1f}%",
-        delta=(
-            f"{latest['pass_rate'] - previous['pass_rate']:+.1f} pts"
-            if previous is not None else None
-        ),
-    )
-    col2.metric("Tests", int(latest["tests"]))
-    col3.metric(
-        "Flaky (latest run)",
-        int(latest["flaky"]),
-        delta=(
-            int(latest["flaky"] - previous["flaky"]) if previous is not None else None
-        ),
-        delta_color="inverse",
-    )
-    col4.metric("Duration (latest run)", f"{latest['duration_seconds']:.0f}s")
+    # reading, not a chart. Rendered as one instrument strip rather than four
+    # st.metric cards: a boxed card implies each number is a separate object,
+    # when in fact they are four readings off the same run.
+    #
+    # Colour is applied only where the number is a verdict. Pass rate and
+    # flaky count are; the test count and the duration are measurements, so
+    # they stay in --text. Anything else would be colour used decoratively.
+    flaky_count = int(latest["flaky"])
+    render_instrument_strip([
+        {
+            "value": f"{latest['pass_rate']:.1f}%",
+            "label": "Pass rate, latest run",
+            "state": "pass" if latest["pass_rate"] >= 100 else "flaky",
+            "delta": (
+                f"{latest['pass_rate'] - previous['pass_rate']:+.1f} pts vs previous"
+                if previous is not None else None
+            ),
+        },
+        {"value": int(latest["tests"]), "label": "Tests in run"},
+        {
+            "value": flaky_count,
+            "label": "Flaky, latest run",
+            "state": "flaky" if flaky_count else None,
+            "delta": (
+                f"{flaky_count - int(previous['flaky']):+d} vs previous"
+                if previous is not None else None
+            ),
+        },
+        {
+            "value": f"{latest['duration_seconds']:.0f}s",
+            "label": "Duration, latest run",
+        },
+    ])
 
     st.subheader("Pass rate over time")
     st.altair_chart(pass_rate_chart(summary, colors), use_container_width=True)
+
+    section_rule()
 
     left, right = st.columns(2)
 
@@ -635,6 +1044,8 @@ def main() -> None:
     with right:
         st.subheader("Suite duration over time")
         st.altair_chart(duration_chart(duration_by_suite(frame), colors), use_container_width=True)
+
+    section_rule()
 
     # A table view is the accessibility fallback for every chart above, and the
     # thing anyone will want when a chart raises a question it cannot answer.
