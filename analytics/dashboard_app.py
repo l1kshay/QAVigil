@@ -175,6 +175,11 @@ def inject_custom_css(theme: str) -> None:
             font-weight: 600;
             letter-spacing: -0.01em;
             color: var(--text);
+            /* 1.3 clears IBM Plex Sans's own required line box (measured at
+               1.28x the font size). Streamlit's default was tighter than the
+               font asks for, which crops cap-height on the ascenders. */
+            line-height: 1.3;
+            overflow: visible;
         }}
         [data-testid="stHeading"] h3 {{ font-size: 1.02rem; }}
         [data-testid="stCaptionContainer"] {{ color: var(--muted); }}
@@ -198,6 +203,7 @@ def inject_custom_css(theme: str) -> None:
         .qv-strip {{
             display: flex;
             align-items: baseline;
+            overflow: visible;
             gap: 1.5rem;
             flex-wrap: wrap;
             padding: 0 0 0.55rem 0;
@@ -208,6 +214,8 @@ def inject_custom_css(theme: str) -> None:
             font-family: {SANS};
             font-weight: 600;
             font-size: 0.95rem;
+            line-height: 1.6;
+            overflow: visible;
             color: var(--accent);
             letter-spacing: 0.01em;
         }}
@@ -244,7 +252,7 @@ def inject_custom_css(theme: str) -> None:
             font-family: {MONO};
             font-size: 2.25rem;      /* >=24px: status colours clear 3:1 here */
             font-weight: 500;
-            line-height: 1.15;
+            line-height: 1.32;
             color: var(--text);
             font-variant-numeric: tabular-nums;
         }}
@@ -269,12 +277,16 @@ def inject_custom_css(theme: str) -> None:
            One figure at roughly 3x the size of the readings beside it. The
            sparkline sits immediately beneath with the gap closed, so the
            number and its history read as a single object. */
-        .qv-hero {{ margin: 0 0 0.1rem 0; }}
+        .qv-hero {{ margin: -0.35rem 0 -0.5rem 0; }}
         .qv-hero .qv-hero-read {{
             font-family: {MONO};
             font-size: 6.5rem;
             font-weight: 500;
-            line-height: 0.95;
+            /* Was 0.95, then 1.12 - both still under IBM Plex Mono's required
+               line box (136px at this size). 1.32 clears it outright, so no
+               ascender can be cropped whatever the value renders as. The
+               vertical cost is taken back from the margins below. */
+            line-height: 1.32;
             letter-spacing: -0.035em;
             color: var(--text);
             font-variant-numeric: tabular-nums;
@@ -286,7 +298,7 @@ def inject_custom_css(theme: str) -> None:
             display: flex;
             align-items: baseline;
             gap: 0.9rem;
-            margin-top: 0.3rem;
+            margin-top: 0;
         }}
         .qv-hero .qv-hero-label {{
             font-family: {SANS};
@@ -356,19 +368,47 @@ def inject_custom_css(theme: str) -> None:
             border: 1px solid var(--border);
             border-radius: 0;
             background: var(--bg);
+            /* The details element itself kept the LIGHT ink, which anything
+               not covered below would inherit. */
+            color: var(--text);
         }}
+        /* Streamlit fills the summary with rgba(166,173,159,0.15) - a wash
+           derived from the light secondaryBackground - which reads as a pale
+           bar on the dark surface. Replaced with the page background and a
+           hairline, consistent with the no-cards rule. */
         [data-testid="stSidebar"] [data-testid="stExpander"] summary {{
             font-family: {SANS};
             font-size: 0.82rem;
             font-weight: 500;
-            color: var(--text);
+            color: var(--text) !important;
+            background: var(--bg) !important;
+            border-bottom: 1px solid var(--border);
+            border-radius: 0 !important;
         }}
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] p {{
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary * {{
+            color: var(--text) !important;
+        }}
+        /* p, li, ul and span together. The previous pass styled only p,
+           strong and code - but the diagnostics are markdown bullet lists, so
+           every value rendered as an <li>, inherited nothing, and fell back to
+           the LIGHT theme ink: measured at 1.16:1 on the dark surface, i.e.
+           invisible. Anything that can hold a value is covered now. */
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] p,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] li,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] ul,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] ol,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] span,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] div {{
             font-family: {MONO};
             font-size: 0.74rem;
             line-height: 1.55;
             color: var(--text);
             margin-bottom: 0.28rem;
+        }}
+        /* Catch-all: any descendant that has not been given its own colour
+           above takes the themed ink rather than a Streamlit default. */
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] * {{
+            color: var(--text);
         }}
         [data-testid="stSidebar"] [data-testid="stExpanderDetails"] strong {{
             font-family: {SANS};
@@ -428,6 +468,36 @@ def inject_custom_css(theme: str) -> None:
         [data-testid="stMultiSelectTagsContainer"] span[role] *,
         [data-testid="stMultiSelectTagsContainer"] > span * {{
             color: var(--bg);
+        }}
+
+        /* --- native icons -------------------------------------------------
+           The sidebar collapse arrow, the expander chevrons and the select
+           chevron all render as span[data-testid="stIconMaterial"], which
+           carried rgba(27,36,48,0.6) - the LIGHT ink at 60% - and so vanished
+           on the dark surface (1.2:1). Inheriting means each icon takes the
+           colour of whatever themed element contains it, so the chips keep
+           their --bg cross while the sidebar arrow takes --text. */
+        [data-testid="stIconMaterial"] {{
+            color: inherit !important;
+            opacity: 1;
+        }}
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stSidebarCollapseButton"] * {{
+            color: var(--text) !important;
+        }}
+
+        /* --- chart chrome --------------------------------------------------
+           Hovering a chart raised Streamlit's element toolbar: "Show data",
+           "Download as PNG", "Copy Vega-Lite spec", "Fullscreen". Verified in
+           the DOM - there is no vega-embed action menu here, so this, not
+           Vega's own actions, is the menu to remove. Scoped with :has() to
+           chart elements only: the run-history table keeps its toolbar, where
+           "Download as CSV" and "Search" are genuinely useful. */
+        [data-testid="stElementContainer"]:has([data-testid="stVegaLiteChart"])
+          [data-testid="stElementToolbar"],
+        [data-testid="stFullScreenFrame"]:has([data-testid="stVegaLiteChart"])
+          [data-testid="stElementToolbar"] {{
+            display: none !important;
         }}
 
         /* --- focus -------------------------------------------------------
@@ -909,6 +979,24 @@ def _base(colors: dict[str, str]) -> dict:
     }
 
 
+#: vega-embed reads embed options from the spec's ``usermeta``. Verified that
+#: st.altair_chart has no embed_options parameter in Streamlit 1.63, and that
+#: usermeta round-trips into the compiled spec, so this is the supported route
+#: rather than a remembered kwarg. Belt-and-braces: the DOM check found no
+#: vega-embed action menu locally - the menu seen on the deployment is
+#: Streamlit's own element toolbar, hidden in CSS - but if any environment does
+#: render Vega's actions, this suppresses them at the source.
+NO_ACTIONS = {"embedOptions": {"actions": False}}
+
+
+def _finish(chart: alt.Chart, colors: dict[str, str], height: int) -> alt.Chart:
+    """Apply the shared config, height and embed options to every chart."""
+    return (
+        chart.properties(height=height, usermeta=NO_ACTIONS)
+        .configure(**_base(colors))
+    )
+
+
 def _rgba(hex_colour: str, alpha: float) -> str:
     """A status colour at a given alpha, for gradient stops."""
     h = hex_colour.lstrip("#")
@@ -972,7 +1060,7 @@ def hero_sparkline(
             alt.Tooltip("pass_rate:Q", title="Pass rate (%)"),
         ],
     )
-    return (area + points).properties(height=104).configure(**_base(colors))
+    return _finish(area + points, colors, 104)
 
 
 def pass_rate_chart(summary: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
@@ -1046,11 +1134,7 @@ def pass_rate_chart(summary: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
 
     # 170, down from 260: a rate series that mostly sits near 100 does not
     # carry enough visual information to justify a third of the page.
-    return (
-        (area + points + hover_points)
-        .properties(height=170)
-        .configure(**_base(colors))
-    )
+    return _finish(area + points + hover_points, colors, 170)
 
 
 def flaky_chart(board: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
@@ -1081,7 +1165,7 @@ def flaky_chart(board: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
         # bars there are, so a short leaderboard squeezed its bands to ~20px
         # and Vega drew the test names on top of each other. Step fixes the
         # height *per band*, so rows stay legible at any row count.
-        .properties(height=alt.Step(40))
+        .properties(height=alt.Step(40), usermeta=NO_ACTIONS)
         .configure(**_base(colors))
     )
 
@@ -1112,7 +1196,7 @@ def duration_chart(durations: pd.DataFrame, colors: dict[str, str]) -> alt.Chart
                 alt.Tooltip("duration_seconds:Q", title="Seconds", format=".1f"),
             ],
         )
-        .properties(height=260)
+        .properties(height=260, usermeta=NO_ACTIONS)
         .configure(**_base(colors))
     )
 
