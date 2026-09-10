@@ -265,6 +265,44 @@ def inject_custom_css(theme: str) -> None:
             margin-top: 0.1rem;
         }}
 
+        /* --- hero ---------------------------------------------------------
+           One figure at roughly 3x the size of the readings beside it. The
+           sparkline sits immediately beneath with the gap closed, so the
+           number and its history read as a single object. */
+        .qv-hero {{ margin: 0 0 0.1rem 0; }}
+        .qv-hero .qv-hero-read {{
+            font-family: {MONO};
+            font-size: 6.5rem;
+            font-weight: 500;
+            line-height: 0.95;
+            letter-spacing: -0.035em;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }}
+        .qv-hero .qv-hero-read.is-pass {{ color: var(--status-pass); }}
+        .qv-hero .qv-hero-read.is-flaky {{ color: var(--status-flaky); }}
+        .qv-hero .qv-hero-read.is-fail {{ color: var(--status-fail); }}
+        .qv-hero .qv-hero-meta {{
+            display: flex;
+            align-items: baseline;
+            gap: 0.9rem;
+            margin-top: 0.3rem;
+        }}
+        .qv-hero .qv-hero-label {{
+            font-family: {SANS};
+            font-size: 0.9rem;
+            color: var(--muted);
+        }}
+        .qv-hero .qv-hero-delta {{
+            font-family: {MONO};
+            font-size: 0.8rem;
+            color: var(--muted);
+        }}
+        /* Pull the sparkline up against the figure it belongs to. */
+        .qv-spark-anchor + div [data-testid="stVegaLiteChart"] {{
+            margin-top: -0.35rem;
+        }}
+
         /* --- section rule ------------------------------------------------ */
         .qv-rule {{
             border: 0;
@@ -345,6 +383,53 @@ def inject_custom_css(theme: str) -> None:
             font-size: 0.82rem;
         }}
 
+        /* --- vertical rhythm ---------------------------------------------
+           Streamlit reserves 96px above the first element and 16px between
+           every block. On a page whose job is to show one number, that
+           pushed the instrument strip below the fold. Roughly a third is
+           taken back so the hero, its sparkline and the readings arrive in
+           the first screen together. */
+        [data-testid="stMainBlockContainer"] {{
+            padding-top: 2.6rem;
+            padding-bottom: 2rem;
+        }}
+        [data-testid="stMain"] [data-testid="stVerticalBlock"] {{
+            gap: 0.65rem;
+        }}
+        [data-testid="stHeading"] h1 {{
+            font-size: 1.85rem;
+            margin-bottom: 0.1rem;
+        }}
+        [data-testid="stCaptionContainer"] {{ margin-bottom: 0.35rem; }}
+        .qv-strip {{ margin-bottom: 0.75rem; }}
+        .qv-instruments {{ margin: 0.5rem 0 0.9rem 0; }}
+        .qv-rule {{ margin: 1.1rem 0 0.8rem 0; }}
+
+        /* --- sidebar multiselect -----------------------------------------
+           Streamlit renders the control with the background from
+           config.toml's *light* base, so in dark mode it appeared as a white
+           box against the panel - the exact class of leftover default this
+           pass exists to catch. Hooked via role="group", which is ARIA and
+           stable, rather than a generated class name. */
+        [data-testid="stMultiSelect"] div[role="group"] {{
+            background: var(--bg) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 0 !important;
+        }}
+        [data-testid="stMultiSelectTagsContainer"] span[role],
+        [data-testid="stMultiSelectTagsContainer"] > span {{
+            background: var(--accent) !important;
+            border-radius: 0 !important;
+        }}
+        [data-testid="stMultiSelect"] input,
+        [data-testid="stMultiSelect"] div[role="group"] * {{
+            color: var(--text);
+        }}
+        [data-testid="stMultiSelectTagsContainer"] span[role] *,
+        [data-testid="stMultiSelectTagsContainer"] > span * {{
+            color: var(--bg);
+        }}
+
         /* --- focus -------------------------------------------------------
            Restated, not removed: nothing above clears an outline, and making
            the ring explicit in the accent colour keeps it visible against
@@ -409,6 +494,31 @@ def render_instrument_strip(readings: list[dict]) -> None:
         )
     st.markdown(
         f'<div class="qv-instruments">{"".join(cells)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_hero(value: str, label: str, state: str | None, delta: str | None) -> None:
+    """The one figure the page is built around.
+
+    Scale is the whole design move here: this figure is roughly three times
+    the size of the readings beside it, so the eye lands on suite health
+    before anything else. The other readings deliberately stay small - the
+    contrast is what makes this one read as the headline.
+    """
+    state_class = f" is-{state}" if state else ""
+    delta_html = (
+        f'<span class="qv-hero-delta">{_esc(delta)}</span>' if delta else ""
+    )
+    st.markdown(
+        f"""
+        <div class="qv-hero">
+          <div class="qv-hero-read{state_class}">{_esc(value)}</div>
+          <div class="qv-hero-meta">
+            <span class="qv-hero-label">{_esc(label)}</span>{delta_html}
+          </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -799,36 +909,123 @@ def _base(colors: dict[str, str]) -> dict:
     }
 
 
+def _rgba(hex_colour: str, alpha: float) -> str:
+    """A status colour at a given alpha, for gradient stops."""
+    h = hex_colour.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def _area_gradient(colour: str) -> alt.Gradient:
+    """A vertical fade from the line down to nothing at the baseline.
+
+    The fill is weight, not decoration: a bare stroke on a flat series reads
+    as an empty chart, while an area anchored to the baseline shows the
+    magnitude the line is sitting at.
+    """
+    return alt.Gradient(
+        gradient="linear",
+        x1=0, x2=0, y1=0, y2=1,
+        stops=[
+            alt.GradientStop(color=_rgba(colour, 0.38), offset=0),
+            alt.GradientStop(color=_rgba(colour, 0.0), offset=1),
+        ],
+    )
+
+
+def hero_sparkline(
+    summary: pd.DataFrame, colors: dict[str, str], colour: str
+) -> alt.Chart:
+    """The pass-rate series as a full-width sparkline under the hero figure.
+
+    Driven by the same data as the pass-rate chart below, not a drawn shape.
+    With one or two runs recorded it will look sparse, which is honest: the
+    dots are the runs there actually are.
+    """
+    base = alt.Chart(summary)
+    area = base.mark_area(
+        line={"color": colour, "strokeWidth": 2},
+        color=_area_gradient(colour),
+    ).encode(
+        # No axes at all: the hero figure states the current value, and the
+        # chart below carries the labelled, zero-based version.
+        x=alt.X("run_timestamp:T", axis=None, title=None),
+        # Deliberately NOT zero-based, unlike the chart below. A sparkline's
+        # job is the shape of the trend, and a zero baseline flattens a series
+        # that lives near 100 into a straight line that shows nothing. Nobody
+        # reads magnitude off an unlabelled strip, so the usual objection to a
+        # non-zero area baseline does not apply here.
+        y=alt.Y(
+            "pass_rate:Q",
+            axis=None,
+            title=None,
+            scale=alt.Scale(zero=False, domainMax=100, nice=False),
+        ),
+    )
+    points = base.mark_point(
+        color=colour, size=26, filled=True, opacity=1,
+    ).encode(
+        x=alt.X("run_timestamp:T", axis=None),
+        y=alt.Y("pass_rate:Q", axis=None),
+        tooltip=[
+            alt.Tooltip("run_timestamp:T", title="Run at"),
+            alt.Tooltip("pass_rate:Q", title="Pass rate (%)"),
+        ],
+    )
+    return (area + points).properties(height=104).configure(**_base(colors))
+
+
 def pass_rate_chart(summary: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
     """Pass rate over time. One series, so no legend - the title names it."""
     hover = alt.selection_point(
         fields=["run_timestamp"], nearest=True, on="pointerover", empty=False
     )
 
-    line = (
+    area = (
         alt.Chart(summary)
-        .mark_line(color=STATUS["pass"], strokeWidth=2, point=False)
+        .mark_area(
+            line={"color": STATUS["pass"], "strokeWidth": 2},
+            color=_area_gradient(STATUS["pass"]),
+        )
         .encode(
             x=alt.X(
                 "run_timestamp:T",
                 title="Run",
                 axis=alt.Axis(format="%b %d", labelAngle=0, tickCount="day"),
             ),
-            # Not zero-based on purpose: a suite that lives between 95 and 100%
-            # shows nothing useful on a 0-100 axis. The axis is labelled, and a
-            # line chart of a rate is not a magnitude comparison.
+            # Zero-based, and stated explicitly rather than left to Vega.
+            # This used to be a line with zero=False, because a series living
+            # near 100 shows nothing on a 0-100 axis. Now that it is an area,
+            # that reasoning inverts: an area filling to a non-zero baseline
+            # misstates the magnitude it appears to show. The precision that
+            # costs is carried by the hero figure above, which states the
+            # current value exactly.
             y=alt.Y(
                 "pass_rate:Q",
                 title="Pass rate (%)",
-                scale=alt.Scale(zero=False, domainMax=100, nice=True),
+                scale=alt.Scale(domain=[0, 100], nice=False),
             ),
         )
     )
 
+    # Always drawn, not just on hover. A flat line with no markers reads as an
+    # empty chart; a dot per run says "these are the runs there have been".
     points = (
         alt.Chart(summary)
         .mark_point(
-            color=STATUS["pass"], size=80, filled=True,
+            color=STATUS["pass"], size=34, filled=True, opacity=1,
+            stroke=colors["bg"], strokeWidth=1,
+        )
+        .encode(x="run_timestamp:T", y="pass_rate:Q")
+    )
+
+    # A second, larger marker that appears under the cursor and carries the
+    # tooltip - it responds to a real state change rather than decorating a
+    # static element.
+    hover_points = (
+        alt.Chart(summary)
+        .mark_point(
+            color=STATUS["pass"], size=110, filled=True,
             stroke=colors["bg"], strokeWidth=2,
         )
         .encode(
@@ -847,7 +1044,13 @@ def pass_rate_chart(summary: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
         .add_params(hover)
     )
 
-    return (line + points).properties(height=260).configure(**_base(colors))
+    # 170, down from 260: a rate series that mostly sits near 100 does not
+    # carry enough visual information to justify a third of the page.
+    return (
+        (area + points + hover_points)
+        .properties(height=170)
+        .configure(**_base(colors))
+    )
 
 
 def flaky_chart(board: pd.DataFrame, colors: dict[str, str]) -> alt.Chart:
@@ -1000,16 +1203,25 @@ def main() -> None:
     # flaky count are; the test count and the duration are measurements, so
     # they stay in --text. Anything else would be colour used decoratively.
     flaky_count = int(latest["flaky"])
+    pass_state = "pass" if latest["pass_rate"] >= 100 else "flaky"
+
+    # The hero, and its real history immediately beneath it.
+    render_hero(
+        value=f"{latest['pass_rate']:.1f}%",
+        label="Pass rate, latest run",
+        state=pass_state,
+        delta=(
+            f"{latest['pass_rate'] - previous['pass_rate']:+.1f} pts vs previous"
+            if previous is not None else None
+        ),
+    )
+    st.markdown('<div class="qv-spark-anchor"></div>', unsafe_allow_html=True)
+    st.altair_chart(
+        hero_sparkline(summary, colors, STATUS[pass_state]),
+        use_container_width=True,
+    )
+
     render_instrument_strip([
-        {
-            "value": f"{latest['pass_rate']:.1f}%",
-            "label": "Pass rate, latest run",
-            "state": "pass" if latest["pass_rate"] >= 100 else "flaky",
-            "delta": (
-                f"{latest['pass_rate'] - previous['pass_rate']:+.1f} pts vs previous"
-                if previous is not None else None
-            ),
-        },
         {"value": int(latest["tests"]), "label": "Tests in run"},
         {
             "value": flaky_count,
