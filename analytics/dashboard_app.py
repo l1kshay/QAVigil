@@ -175,10 +175,14 @@ def inject_custom_css(theme: str) -> None:
             font-weight: 600;
             letter-spacing: -0.01em;
             color: var(--text);
-            /* 1.3 clears IBM Plex Sans's own required line box (measured at
-               1.28x the font size). Streamlit's default was tighter than the
-               font asks for, which crops cap-height on the ascenders. */
-            line-height: 1.3;
+            /* 1.45, with margin. IBM Plex Sans requires 1.395em by its own
+               usWin metrics (1025 + 275 over 1000 upm, read from the woff2).
+               The earlier 1.3 came from a canvas measurement that reports the
+               smaller hhea figure, so it was actually UNDER the requirement
+               that Windows browsers apply. 1.55 leaves ~11% headroom rather
+               than the ~4% that 1.45 gave, on the same reasoning as the
+               wordmark: this element has already been mis-measured once. */
+            line-height: 1.55;
             overflow: visible;
         }}
         [data-testid="stHeading"] h3 {{ font-size: 1.02rem; }}
@@ -187,7 +191,6 @@ def inject_custom_css(theme: str) -> None:
         /* Mono for raw values: inline code, dataframe cells, and anything
            explicitly marked as a figure or identifier. */
         [data-testid="stApp"] code,
-        [data-testid="stDataFrame"] [role="gridcell"],
         .qv-mono {{
             font-family: {MONO};
             font-variant-ligatures: none;
@@ -214,7 +217,16 @@ def inject_custom_css(theme: str) -> None:
             font-family: {SANS};
             font-weight: 600;
             font-size: 0.95rem;
-            line-height: 1.6;
+            /* 1.75, not a tight fit. IBM Plex Sans's own metrics (read from
+               the woff2 with fontTools, not from a rendered measurement)
+               require 1.395em: usWinAscent 1025 + usWinDescent 275 over a
+               1000 upm. Windows browsers use those win metrics for the inline
+               box, while canvas fontBoundingBox reports the smaller hhea
+               figure of 1.30em - which is why the local measurement in Phase
+               8c read this element as safe. 1.75 leaves 25% headroom over the
+               real requirement, so a fallback face with taller metrics during
+               font load still cannot crop it. */
+            line-height: 1.75;
             overflow: visible;
             color: var(--accent);
             letter-spacing: 0.01em;
@@ -227,6 +239,7 @@ def inject_custom_css(theme: str) -> None:
         .qv-strip .qv-val {{
             font-family: {MONO};
             font-size: 0.78rem;
+            line-height: 1.75;
             color: var(--text);
         }}
         .qv-strip .qv-spacer {{ margin-left: auto; }}
@@ -252,7 +265,7 @@ def inject_custom_css(theme: str) -> None:
             font-family: {MONO};
             font-size: 2.25rem;      /* >=24px: status colours clear 3:1 here */
             font-weight: 500;
-            line-height: 1.32;
+            line-height: 1.40;        /* 1.30em required; margin for fallbacks */
             color: var(--text);
             font-variant-numeric: tabular-nums;
         }}
@@ -282,11 +295,12 @@ def inject_custom_css(theme: str) -> None:
             font-family: {MONO};
             font-size: 6.5rem;
             font-weight: 500;
-            /* Was 0.95, then 1.12 - both still under IBM Plex Mono's required
-               line box (136px at this size). 1.32 clears it outright, so no
-               ascender can be cropped whatever the value renders as. The
-               vertical cost is taken back from the margins below. */
-            line-height: 1.32;
+            /* IBM Plex Mono requires 1.30em (hhea, win and typo metrics all
+               agree, read from the woff2). 1.40 leaves margin for a fallback
+               mono face with taller metrics during font load. Was 0.95, then
+               1.12, then 1.32 - each an underestimate from a rendered
+               measurement rather than the font's own tables. */
+            line-height: 1.40;
             letter-spacing: -0.035em;
             color: var(--text);
             font-variant-numeric: tabular-nums;
@@ -314,6 +328,50 @@ def inject_custom_css(theme: str) -> None:
         .qv-spark-anchor + div [data-testid="stVegaLiteChart"] {{
             margin-top: -0.35rem;
         }}
+
+        /* --- run history table --------------------------------------------
+           Plain HTML, so the tokens reach it. Hairline rules, no zebra fill,
+           no card edge - the same treatment as everything else. Values are
+           numbers and identifiers, so the body is mono; the header names are
+           words, so they stay in sans. */
+        .qv-table-wrap {{ overflow-x: auto; }}
+        .qv-table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg);
+            font-family: {MONO};
+            font-size: 0.76rem;
+            font-variant-numeric: tabular-nums;
+        }}
+        /* Streamlit's markdown styling puts a full border on th/td, which
+           renders as a spreadsheet grid. Only the horizontal hairline is
+           wanted, so the vertical edges are cleared explicitly. */
+        .qv-table th, .qv-table td {{
+            border-left: none;
+            border-right: none;
+            border-top: none;
+        }}
+        .qv-table th {{
+            font-family: {SANS};
+            font-size: 0.74rem;
+            font-weight: 500;
+            text-align: left;
+            color: var(--muted);
+            background: var(--bg);
+            padding: 0.4rem 0.9rem 0.4rem 0;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            line-height: 1.45;
+        }}
+        .qv-table td {{
+            color: var(--text);
+            background: var(--bg);
+            padding: 0.34rem 0.9rem 0.34rem 0;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            line-height: 1.40;
+        }}
+        .qv-table tbody tr:last-child td {{ border-bottom: none; }}
 
         /* --- section rule ------------------------------------------------ */
         .qv-rule {{
@@ -363,8 +421,13 @@ def inject_custom_css(theme: str) -> None:
             background: transparent !important;
         }}
 
-        /* --- sidebar diagnostics: a debug readout, not decoration -------- */
-        [data-testid="stSidebar"] [data-testid="stExpander"] details {{
+        /* --- expanders: every one, not just the sidebar's ------------------
+           These rules were scoped to [data-testid="stSidebar"] in Phase 8c,
+           which fixed the Diagnostics panel and left every other expander
+           with the leak. There are two in this app - Diagnostics in the
+           sidebar and Run history in the main area - and the scope is now
+           global so a third would be covered on arrival. */
+        [data-testid="stExpander"] details {{
             border: 1px solid var(--border);
             border-radius: 0;
             background: var(--bg);
@@ -376,7 +439,7 @@ def inject_custom_css(theme: str) -> None:
            derived from the light secondaryBackground - which reads as a pale
            bar on the dark surface. Replaced with the page background and a
            hairline, consistent with the no-cards rule. */
-        [data-testid="stSidebar"] [data-testid="stExpander"] summary {{
+        [data-testid="stExpander"] summary {{
             font-family: {SANS};
             font-size: 0.82rem;
             font-weight: 500;
@@ -385,7 +448,7 @@ def inject_custom_css(theme: str) -> None:
             border-bottom: 1px solid var(--border);
             border-radius: 0 !important;
         }}
-        [data-testid="stSidebar"] [data-testid="stExpander"] summary * {{
+        [data-testid="stExpander"] summary * {{
             color: var(--text) !important;
         }}
         /* p, li, ul and span together. The previous pass styled only p,
@@ -393,12 +456,12 @@ def inject_custom_css(theme: str) -> None:
            every value rendered as an <li>, inherited nothing, and fell back to
            the LIGHT theme ink: measured at 1.16:1 on the dark surface, i.e.
            invisible. Anything that can hold a value is covered now. */
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] p,
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] li,
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] ul,
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] ol,
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] span,
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] div {{
+        [data-testid="stExpanderDetails"] p,
+        [data-testid="stExpanderDetails"] li,
+        [data-testid="stExpanderDetails"] ul,
+        [data-testid="stExpanderDetails"] ol,
+        [data-testid="stExpanderDetails"] span,
+        [data-testid="stExpanderDetails"] div {{
             font-family: {MONO};
             font-size: 0.74rem;
             line-height: 1.55;
@@ -407,15 +470,15 @@ def inject_custom_css(theme: str) -> None:
         }}
         /* Catch-all: any descendant that has not been given its own colour
            above takes the themed ink rather than a Streamlit default. */
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] * {{
+        [data-testid="stExpanderDetails"] * {{
             color: var(--text);
         }}
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] strong {{
+        [data-testid="stExpanderDetails"] strong {{
             font-family: {SANS};
             font-weight: 600;
             color: var(--muted);
         }}
-        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] code {{
+        [data-testid="stExpanderDetails"] code {{
             font-family: {MONO};
             color: var(--text);
         }}
@@ -425,12 +488,20 @@ def inject_custom_css(theme: str) -> None:
 
         /* --- vertical rhythm ---------------------------------------------
            Streamlit reserves 96px above the first element and 16px between
-           every block. On a page whose job is to show one number, that
-           pushed the instrument strip below the fold. Roughly a third is
-           taken back so the hero, its sparkline and the readings arrive in
-           the first screen together. */
+           every block, and the 96px is not decoration: stHeader is an OPAQUE
+           overlay, 60px tall at z-index 999990, painted on top of the page.
+           Phase 8b cut this to 2.6rem/41.6px for a tighter fold and put the
+           top strip 8px UNDERNEATH it - measured, stripUnderHeader: true -
+           so the header painted over the wordmark's ascenders. Locally that
+           is invisible because the header is the same colour as the page;
+           on Streamlit Cloud, whose header carries extra chrome and is
+           taller, it shows as clipped glyphs.
+
+           5.5rem/88px clears the 60px header by 28px, which leaves room for
+           a taller deployed header, and still beats Streamlit's 96px default.
+           Do not reduce this below the header height again. */
         [data-testid="stMainBlockContainer"] {{
-            padding-top: 2.6rem;
+            padding-top: 5.5rem;
             padding-bottom: 2rem;
         }}
         [data-testid="stMain"] [data-testid="stVerticalBlock"] {{
@@ -589,6 +660,49 @@ def render_hero(value: str, label: str, state: str | None, delta: str | None) ->
           </div>
         </div>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_run_history(table: pd.DataFrame) -> None:
+    """The run-history table, as themed HTML rather than st.dataframe.
+
+    Why not st.dataframe: it renders through glide-data-grid into a *canvas*
+    (verified - two canvas elements, cells exposed only as accessibility
+    nodes), and takes its colours from Streamlit's theme object rather than
+    from CSS. Since config.toml pins a single light base while this app
+    toggles its own theme, the grid stayed light on a dark page and no
+    stylesheet could reach it.
+
+    Both documented escape hatches were tried and photographed:
+    ``Styler.set_properties`` does recolour the body cells, but
+    ``set_table_styles`` does not reach the header row or the gridlines, which
+    stayed light. A half-themed table is still a clashing table, so the view
+    is plain HTML, which the same tokens style as everything else.
+
+    What this costs: the grid's built-in sort and column resize. The CSV
+    download that lived in its toolbar is re-offered by the caller.
+    """
+    headers = "".join(f"<th>{_esc(c)}</th>" for c in table.columns)
+    rows = []
+    for _, row in table.iterrows():
+        cells = []
+        for col in table.columns:
+            value = row[col]
+            if isinstance(value, pd.Timestamp):
+                shown = value.strftime("%Y-%m-%d %H:%M")
+            elif value is None or (isinstance(value, float) and pd.isna(value)):
+                shown = "-"
+            elif isinstance(value, float):
+                shown = f"{value:g}"
+            else:
+                shown = str(value)
+            cells.append(f"<td>{_esc(shown)}</td>")
+        rows.append(f"<tr>{''.join(cells)}</tr>")
+    st.markdown(
+        f'<div class="qv-table-wrap"><table class="qv-table">'
+        f"<thead><tr>{headers}</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>",
         unsafe_allow_html=True,
     )
 
@@ -1346,13 +1460,19 @@ def main() -> None:
     # A table view is the accessibility fallback for every chart above, and the
     # thing anyone will want when a chart raises a question it cannot answer.
     with st.expander("Run history (table view)"):
-        st.dataframe(
-            summary[
-                ["run_timestamp", "run_id", "branch", "tests", *STATUS_ORDER,
-                 "pass_rate", "duration_seconds"]
-            ],
-            use_container_width=True,
-            hide_index=True,
+        table = summary[
+            ["run_timestamp", "run_id", "branch", "tests", *STATUS_ORDER,
+             "pass_rate", "duration_seconds"]
+        ]
+        render_run_history(table)
+        # st.dataframe carried a CSV download in its toolbar; rendering the
+        # table as HTML loses that, so it is offered explicitly rather than
+        # quietly dropped.
+        st.download_button(
+            "Download run history as CSV",
+            data=table.to_csv(index=False).encode("utf-8"),
+            file_name="qavigil_run_history.csv",
+            mime="text/csv",
         )
 
 
