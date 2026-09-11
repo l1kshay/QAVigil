@@ -1,22 +1,157 @@
 # QAVigil
 
-CI-integrated UI + API test automation framework (Playwright, Pytest, GitHub
-Actions) built against a live demo e-commerce app.
+A CI-gated UI and API test suite for a live e-commerce application, with a
+test-analytics dashboard built on its own run history.
 
-The target under test is [automationexercise.com](https://automationexercise.com)
-— a public demo store with both a real UI and a documented REST API. QAVigil
-does not build or host that application; it tests it.
+[![tests](https://github.com/l1kshay/QAVigil/actions/workflows/tests.yml/badge.svg)](https://github.com/l1kshay/QAVigil/actions/workflows/tests.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-The full design rationale lives in [ARCHITECTURE.md](ARCHITECTURE.md).
+**Live dashboard:** https://appvigil-beqhzc3u7ebjddzqbkmgcx.streamlit.app
+
+Reading real run history out of BigQuery, written by this repository's own CI.
+
+![QAVigil analytics dashboard, dark theme](docs/dashboard-dark.png)
+
+<details>
+<summary>Same dashboard, light theme</summary>
+
+![QAVigil analytics dashboard, light theme](docs/dashboard-light.png)
+
+</details>
 
 ---
 
-## Requirements
+## What this is
 
-- Python 3.11 or newer (developed and pinned against 3.12)
-- Node.js — only if you want to generate the Allure HTML report locally
+A portfolio project demonstrating QA/SDET engineering practice end to end:
+strict Page Object Model for the browser layer, a client layer for the API,
+externalized test data, CI that gates on every push, and an analytics layer
+that turns run history into a picture of suite health over time.
 
-## Install
+The application under test is
+[automationexercise.com](https://automationexercise.com) — a public demo store
+with both a real UI and a documented REST API. QAVigil does not build or host
+that application. It tests it.
+
+Three things it does:
+
+- **UI automation** — Playwright driving four end-to-end user journeys through
+  page objects. No test file contains a raw locator or a URL.
+- **API testing** — a client layer over the six documented endpoints, with
+  JSON Schema validation of every response contract. No test file calls
+  `requests` directly.
+- **Run analytics** — each CI run appends one row per test to BigQuery; the
+  Streamlit dashboard above reads that history for pass-rate trend, flaky-test
+  frequency and suite duration.
+
+## What it covers
+
+**70 test cases, from 52 test functions.** The difference is parametrization:
+thirteen functions expand into multiple cases from the YAML and JSON fixtures
+in `test_data/`. Both numbers are worth stating — 70 is what pytest collects
+and what CI gates on; 52 is how many distinct test bodies exist.
+
+| | Test functions | Collected cases |
+|---|---|---|
+| `tests/ui/` | 21 | 25 |
+| `tests/api/` | 28 | 42 |
+| `tests/test_environment.py` | 3 | 3 |
+| **Total** | **52** | **70** |
+
+Four distinct end-to-end UI flows, identified by what each test actually
+drives rather than by filename:
+
+1. **Authentication** — sign in, invalid credentials, sign out
+2. **Product browse and search** — catalogue, search, empty results
+3. **Cart** — add from listing, quantity, removal, anonymous-checkout block
+4. **Checkout and payment** — address review, order placement, invoice
+
+The environment checks are separate on purpose. When a run goes red, they are
+what distinguishes "the suite found a regression" from "the target site was
+unreachable".
+
+Every test is independent and order-agnostic, which is what makes parallel
+execution safe: the full suite runs in roughly 58 seconds across four workers,
+against about two and a half minutes serially.
+
+## Continuous integration
+
+| Trigger | What runs |
+|---|---|
+| Push to `main` | `smoke` — 19 cases, fast feedback |
+| Pull request | `regression` — 51 cases |
+| Nightly, 03:00 UTC | `regression` — the target is a third-party site that can break without anyone touching this repo |
+| Manual dispatch | Your choice of `smoke`, `regression` or everything |
+
+A failing test fails the check. Reports publish either way, because the report
+of a failing run is the one worth reading. UI failures attach a screenshot,
+the URL, the page HTML and a full Playwright trace, openable at
+[trace.playwright.dev](https://trace.playwright.dev) — which is what makes a
+CI-only failure diagnosable.
+
+CI reruns a failing test once. A test that fails and then passes is flaky by
+definition; one that fails twice is a real failure. That distinction is what
+keeps a red build meaningful.
+
+## Four defects found in the tests themselves
+
+The most useful thing this project produced was not a bug in the application.
+It was four defects in the test suite's own logic — three of which were
+passing, or would have passed, while testing nothing. They are listed here
+because catching them is the actual skill.
+
+**A vacuous assertion pattern that would have disabled every negative test.**
+The target API answers *every* request with `HTTP 200` and reports the real
+outcome in a `responseCode` field in the body. A missing parameter returns
+`HTTP 200` with `{"responseCode": 400}`. A suite asserting on
+`response.status_code` would have seen 200 everywhere, and all eighteen
+negative cases would have passed without exercising anything. The client layer
+resolves status from the body, and one test asserts that premise explicitly so
+it cannot rot unnoticed.
+
+**A false assumption about how search works.** A UI test required every search
+result's name to contain the search term. It failed — correctly. The site
+matches on product *category* as well as name, so searching "dress" returns
+items whose names lack the word. The test had encoded a belief about the
+feature that was simply wrong. It now asserts a true property, and category
+relevance moved to the API suite, where the field actually exists.
+
+**A flaky test, root-caused rather than retried.** A checkout test timed out
+under four-way parallelism. The cause was not the site being slow: the wait
+was on the navigation's `load` event, which also waits on every subresource,
+and the page embeds third-party ad frames that outlast the timeout. The
+navigation had already succeeded. Waiting for `commit`, and for the element
+the next step needs, turned one flaky failure into three consecutive clean
+runs — and made the suite 25% faster. No retry, no `sleep()`.
+
+**A security test blocked before it reached the server.** The SQL-injection
+case used `' OR '1'='1`, which contains spaces and is therefore not a valid
+email address. The browser's native validation refused to submit the form, so
+the payload never reached the application. The test passed, and proved only
+that browsers validate email syntax. The payload is now formatted to actually
+reach the server, and the client-side blocking it had been accidentally
+exercising is covered by its own test.
+
+None of these were bugs in automationexercise.com. The site behaved as
+documented throughout.
+
+## Tech stack
+
+| Layer | Tools |
+|---|---|
+| Browser automation | Playwright |
+| API | requests, jsonschema |
+| Test framework | pytest, pytest-xdist, pytest-rerunfailures |
+| Test data | PyYAML, Faker |
+| Reporting | Allure, pytest-html |
+| Configuration | python-dotenv |
+| CI and hosting | GitHub Actions, GitHub Pages |
+| Analytics | BigQuery, Streamlit, Altair, pandas |
+
+## Running it locally
+
+Python 3.11 or newer; developed and pinned against 3.12.
 
 ```bash
 git clone https://github.com/l1kshay/QAVigil.git
@@ -27,211 +162,44 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 python -m playwright install chromium
+
+pytest                             # everything, 70 cases
+pytest -m smoke                    # 19 cases
+pytest -n 4                        # four workers in parallel
 ```
 
-Copy the environment template. The suite runs without it — every value has a
-working default — but this is where you change the target or watch a run in a
-real browser:
-
-```bash
-cp .env.example .env               # Windows: copy .env.example .env
-```
-
-`.env` is gitignored and must never be committed. In CI these same keys come
-from GitHub Actions Secrets.
-
-| Key | Default | Purpose |
-|---|---|---|
-| `BASE_URL` | `https://automationexercise.com` | UI target |
-| `API_BASE_URL` | `<BASE_URL>/api` | API target |
-| `BROWSER` | `chromium` | `chromium`, `firefox` or `webkit` |
-| `HEADLESS` | `true` | set `false` to watch the browser |
-| `TIMEOUT_MS` | `30000` | per-action and per-navigation timeout |
-| `SLOW_MO_MS` | `0` | raise to slow each action down and watch a run |
-| `TEST_USER_EMAIL` | *(empty)* | optional pre-existing account |
-| `TEST_USER_PASSWORD` | *(empty)* | optional pre-existing account |
-
-The test account keys are optional. Tests that need a signed-in user create
-their own throwaway account and delete it afterwards, so a fresh clone runs
-green with no credentials at all.
-
-## Run
-
-```bash
-pytest                             # everything
-pytest -m smoke                    # fast, high-value subset
-pytest -m regression               # the full suite
-pytest tests/api                   # API only (no browser needed)
-pytest tests/ui                    # UI only
-pytest -n 4                        # 4 workers in parallel
-pytest -k login                    # anything matching "login"
-```
-
-Parallel is the normal way to run this suite: ~58s across 4 workers versus
-~2m30s serially. Every test is independent by construction, so `-n` is safe.
-
-To watch a run in a real browser:
+No configuration is required. Every setting has a working default, and tests
+that need a signed-in user create a throwaway account through the site's API
+and delete it afterwards — so a fresh clone runs green with no credentials.
+Copy `.env.example` to `.env` only to change the target, switch browser, or
+watch a run headed:
 
 ```bash
 HEADLESS=false SLOW_MO_MS=300 pytest -m smoke -k checkout
 ```
 
-## Markers
+## Analytics
 
-| Marker | Meaning | When it runs in CI |
-|---|---|---|
-| `smoke` | Fast, high-value checks. If these fail, something important broke. | Every push |
-| `regression` | Full coverage, including edge cases and slow journeys. | Pull requests, and nightly |
+The dashboard source is in [`analytics/`](analytics/). After each CI run,
+[`export_to_bigquery.py`](analytics/export_to_bigquery.py) parses the Allure
+results, collapses retries so a flaky test is recorded once rather than as
+both a pass and a failure, and appends a row per test to an append-only
+BigQuery table. [`dashboard_app.py`](analytics/dashboard_app.py) reads it with
+a separate read-only credential and is deployed at the
+[live dashboard](https://appvigil-beqhzc3u7ebjddzqbkmgcx.streamlit.app).
 
-Markers are `--strict`, so a typo in a marker name fails the run instead of
-silently selecting nothing.
+It also runs against a local JSONL export with no cloud account at all, which
+is how it was built and reviewed. Setup, schema and the steps that need a
+human are in [`analytics/README.md`](analytics/README.md).
 
----
+## Design rationale
 
-## Reading the report
+[ARCHITECTURE.md](ARCHITECTURE.md) carries the full technical design: the
+layered architecture, the data model, and a decision log covering every choice
+that is not obvious from the code — why fixture scoping favours independence
+over speed, why response schemas live with the clients rather than with the
+test data, why the analytics export never fails the build.
 
-Every run writes two reports into `reports/`:
+## License
 
-**`reports/report.html`** — self-contained pytest-html output. Open it directly
-in a browser. This is the fallback, and the one that always works locally.
-
-**`reports/allure-results/`** — raw Allure results. Turning them into a report
-needs the Allure CLI, which needs Java:
-
-```bash
-npm install -g allure-commandline
-allure serve reports/allure-results        # opens in a browser
-```
-
-CI generates the Allure HTML for you and publishes it — see below.
-
-### What a failing UI test gives you
-
-A UI failure attaches four things to its Allure entry, on the test itself
-rather than buried under a teardown section:
-
-- **`screenshot-at-failure`** — full-page screenshot at the moment of failure
-- **`url-at-failure`** — where the browser actually was, which is usually the
-  answer when a test fails somewhere unexpected
-- **`page-html-at-failure`** — the DOM at failure, for when a locator stopped
-  matching
-- **`playwright-trace`** — a complete recording: DOM snapshots, network,
-  console, and sources. Download it and open it at
-  [trace.playwright.dev](https://trace.playwright.dev). This is the tool that
-  solves "it fails in CI but not on my machine."
-
-None of these are produced for passing tests, deliberately — keeping traces for
-green runs would cost hundreds of megabytes per run and bury the one that
-matters.
-
-### Where CI publishes it
-
-- **Artifacts** — every run, pass or fail, uploads `test-report-<n>` containing
-  the Allure HTML and `report.html`. Failing runs additionally upload
-  `failure-artifacts-<n>` with the screenshots and traces.
-- **GitHub Pages** — runs on `main` publish the Allure report to the repository's
-  Pages site.
-
-> **One-time setup:** GitHub Pages must be enabled with **Settings → Pages →
-> Source: GitHub Actions** before the publish step can succeed. This repository's
-> workflow is ready for it; the setting has to be flipped by a repo admin.
-
----
-
-## Telling a real failure from a flaky one
-
-The target is a live third-party demo site. It goes slow, serves ad iframes,
-and occasionally rate-limits — none of which are bugs in the code under test,
-but all of which can turn a test red.
-
-Two things separate signal from noise:
-
-1. **CI reruns a failing test once** (`--reruns 1`). A test that fails and then
-   passes is flaky by definition; one that fails twice is a real failure and
-   fails the build. The Allure report labels the retried ones.
-2. **`tests/test_environment.py` runs first-class in the smoke set.** If the
-   site is simply unreachable, those three checks fail and tell you the suite
-   never got the chance to test anything — rather than leaving you to infer it
-   from thirty confusing failures.
-
-### Known flaky tests
-
-Nothing in this suite is currently quarantined or expected to flake. The three
-sources of instability found so far were all fixed at the root rather than
-papered over with retries or sleeps:
-
-| Symptom | Root cause | Fix |
-|---|---|---|
-| `test_placing_an_order_confirms_it` timed out waiting for `**/payment**` under 4-way parallelism | `wait_for_url` waited for the `load` event, which waits on *every* subresource; the site's third-party ad frames outlast the 30s timeout under concurrent load, even though the navigation itself had succeeded | Wait for `commit` instead, and have checkout/payment wait for the element the next step needs. Went from one flaky failure to three consecutive clean parallel runs, and 25% faster. |
-| Cart modal's "Continue Shopping" click intermittently swallowed | The modal's fade-out animation intercepted the following click | `continue_shopping()` waits for the modal to reach the `hidden` state before returning |
-| `test_search_results_are_relevant_to_the_term` failed on valid data | Not flakiness — a wrong assumption. The site matches on **category** as well as name, so "dress" correctly returns items whose names lack the word | Test rewritten to assert a true property; category relevance moved to the API suite, where the field exists |
-
-If a test does start flaking, please add it here with its root cause rather
-than only increasing a timeout.
-
----
-
-## Project layout
-
-```
-pages/          Page Objects. One class per page, intent-named actions.
-api_clients/    One client per API surface, plus the response schemas.
-tests/ui/       Browser tests. No raw locators, no URLs.
-tests/api/      API tests. No raw requests calls.
-test_data/      YAML/JSON fixtures and their loader.
-config/         Environment resolution.
-reports/        Generated output (gitignored).
-conftest.py     Shared fixtures.
-```
-
-### The rules this structure enforces
-
-- Tests never contain a raw Playwright locator or a URL — they call Page Object
-  methods.
-- API tests never call `requests` directly — they go through `api_clients/`.
-- No `sleep()` anywhere. Waits target conditions, never durations.
-- Every test is independent and order-agnostic, which is what makes `-n` safe.
-- No credentials in the repository. Valid accounts are generated per test.
-- Every test-data record carries an explicit `expected_result` /
-  `expected_status`.
-
----
-
-## Test-run analytics (optional)
-
-`analytics/` adds a history layer on top of the suite: pass-rate trend,
-flaky-test frequency, and suite duration over time, exported to BigQuery and
-visualized in Looker Studio and a Streamlit app.
-
-It is entirely optional and entirely separate — nothing in `tests/`, `pages/`
-or `api_clients/` imports it, and its dependencies live in
-`analytics/requirements.txt` so running the test suite never requires a cloud
-SDK.
-
-It also works with no cloud account at all:
-
-```bash
-pytest
-python analytics/export_to_bigquery.py --dry-run   # -> reports/test_runs.jsonl
-pip install -r analytics/requirements.txt
-streamlit run analytics/dashboard_app.py
-```
-
-Setup, schema, and the list of steps that need a human are in
-[`analytics/README.md`](analytics/README.md).
-
----
-
-### One thing to know before reading the code
-
-**This API answers every request with HTTP 200** and reports the real status in
-the response body's `responseCode` field. A missing parameter comes back as
-`HTTP 200` with `{"responseCode": 400, ...}`.
-
-That is why `ApiResponse.status` means the *body* code, and why `http_status` is
-kept separately. A suite that asserted on `response.status_code` would see 200
-everywhere and every negative test would pass without testing anything. The
-assumption is asserted explicitly in
-`tests/api/test_negative_cases.py::test_errors_are_reported_in_the_body_not_the_http_status`,
-so if the site ever adopts real status codes, that test fails and says so
-instead of the suite quietly going green.
+MIT — see [LICENSE](LICENSE).
