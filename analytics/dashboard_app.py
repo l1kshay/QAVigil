@@ -451,29 +451,31 @@ def inject_custom_css(theme: str) -> None:
         [data-testid="stExpander"] summary * {{
             color: var(--text) !important;
         }}
-        /* p, li, ul and span together. The previous pass styled only p,
-           strong and code - but the diagnostics are markdown bullet lists, so
-           every value rendered as an <li>, inherited nothing, and fell back to
-           the LIGHT theme ink: measured at 1.16:1 on the dark surface, i.e.
-           invisible. Anything that can hold a value is covered now. */
-        [data-testid="stExpanderDetails"] p,
-        [data-testid="stExpanderDetails"] li,
-        [data-testid="stExpanderDetails"] ul,
-        [data-testid="stExpanderDetails"] ol,
-        [data-testid="stExpanderDetails"] span,
-        [data-testid="stExpanderDetails"] div {{
-            font-family: {MONO};
-            font-size: 0.74rem;
-            line-height: 1.55;
-            color: var(--text);
-            margin-bottom: 0.28rem;
-        }}
-        /* Catch-all: any descendant that has not been given its own colour
-           above takes the themed ink rather than a Streamlit default. */
+        /* COLOUR is global - that is the leak being fixed, and it has to
+           reach every expander. */
+        [data-testid="stExpanderDetails"],
         [data-testid="stExpanderDetails"] * {{
             color: var(--text);
         }}
-        [data-testid="stExpanderDetails"] strong {{
+        /* TYPOGRAPHY is not. The mono readout treatment belongs to the
+           sidebar diagnostics panel specifically. Phase 8d applied it to
+           every expander, which also restyled widget labels that happen to
+           sit inside one - the CSV download button's label came out in mono,
+           though it is words, not a value. p/li/ul/ol are covered because
+           the diagnostics render as markdown bullet lists, which is what made
+           every value an <li> that inherited nothing and fell back to the
+           light ink at 1.16:1. */
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] p,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] li,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] ul,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] ol,
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] span {{
+            font-family: {MONO};
+            font-size: 0.74rem;
+            line-height: 1.55;
+            margin-bottom: 0.28rem;
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpanderDetails"] strong {{
             font-family: {SANS};
             font-weight: 600;
             color: var(--muted);
@@ -527,8 +529,13 @@ def inject_custom_css(theme: str) -> None:
             border: 1px solid var(--border) !important;
             border-radius: 0 !important;
         }}
-        [data-testid="stMultiSelectTagsContainer"] span[role],
-        [data-testid="stMultiSelectTagsContainer"] > span {{
+        /* Every span, not just the one carrying role="group". The chips are
+           nested - an outer role="group" wrapper around the actual chip span -
+           and the Phase 8b selector matched only the wrapper, leaving the chip
+           itself on Streamlit's light accent (#3A5A78) in dark mode. Measured:
+           the remove-x sat at 2.52:1. With the themed accent it is 6.61:1
+           dark / 6.71:1 light. */
+        [data-testid="stMultiSelectTagsContainer"] span {{
             background: var(--accent) !important;
             border-radius: 0 !important;
         }}
@@ -536,9 +543,48 @@ def inject_custom_css(theme: str) -> None:
         [data-testid="stMultiSelect"] div[role="group"] * {{
             color: var(--text);
         }}
-        [data-testid="stMultiSelectTagsContainer"] span[role] *,
-        [data-testid="stMultiSelectTagsContainer"] > span * {{
-            color: var(--bg);
+        [data-testid="stMultiSelectTagsContainer"] span *,
+        [data-testid="stMultiSelectTagsContainer"] button,
+        [data-testid="stMultiSelectTagsContainer"] svg {{
+            color: var(--bg) !important;
+            fill: var(--bg) !important;
+        }}
+
+        /* --- buttons -------------------------------------------------------
+           st.download_button rendered as stBaseButton-secondary with a
+           hardcoded near-white fill (rgb(252,253,252)) in BOTH themes - 1.22:1
+           text contrast on the dark surface, and even in light it was a shade
+           off the page. Every button kind is covered here rather than the one
+           that was reported, since the file gains widgets over time; there is
+           currently one st.download_button and no st.button.
+
+           Styled as a hairline control, not a filled pill: same no-cards rule
+           as everything else. The hover state recolours the border and text -
+           a real state change, not decoration - with no transition. */
+        [data-testid="stDownloadButton"] button,
+        [data-testid="stBaseButton-secondary"],
+        [data-testid="stBaseButton-primary"],
+        [data-testid="stBaseButton-tertiary"] {{
+            background: var(--bg) !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 0 !important;
+            font-family: {SANS};
+            font-size: 0.8rem;
+            box-shadow: none !important;
+        }}
+        [data-testid="stDownloadButton"] button:hover,
+        [data-testid="stBaseButton-secondary"]:hover,
+        [data-testid="stBaseButton-primary"]:hover,
+        [data-testid="stBaseButton-tertiary"]:hover {{
+            border-color: var(--accent) !important;
+            color: var(--accent) !important;
+        }}
+        [data-testid="stDownloadButton"] button *,
+        [data-testid="stBaseButton-secondary"] * {{
+            color: inherit !important;
+            font-family: {SANS} !important;
+            font-size: 0.8rem !important;
         }}
 
         /* --- native icons -------------------------------------------------
